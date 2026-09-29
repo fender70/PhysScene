@@ -1,0 +1,79 @@
+# Starter asset catalog. It uses only meshes and materials that ship with
+# Unreal Engine (/Engine/BasicShapes), so the full pipeline runs in a blank project.
+#
+# Engine basic shapes are 100 cm across with the pivot at the centre, so
+# `scale` = size in metres (sphere: diameter; cylinder: diameter, diameter, height).
+#
+# Materials can be a path string or a dict that creates a material instance:
+#   {base: <parent material>, vector_params: {Color: [r, g, b]}, scalar_params: {...}}
+# `preview_color` is only used by the built-in preview renderer.
+objects:
+  Ball:
+    prompt_name: ball
+    ue_mesh: /Engine/BasicShapes/Sphere
+    scale: [0.12, 0.12, 0.12]
+    shape: {type: sphere, radius: 0.06}
+    mass: 0.15
+    friction: 0.6
+    restitution: 0.6
+    rolling_friction: 0.0004
+    motion: roll
+    appearances:
+      red:   {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.8, 0.05, 0.05]}}, preview_color: [0.8, 0.1, 0.1]}
+      blue:  {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.05, 0.15, 0.8]}}, preview_color: [0.1, 0.2, 0.85]}
+      green: {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.1, 0.6, 0.1]}}, preview_color: [0.15, 0.65, 0.15]}
+  Can:
+    prompt_name: can
+    ue_mesh: /Engine/BasicShapes/Cylinder
+    scale: [0.066, 0.066, 0.12]
+    shape: {type: cylinder, radius: 0.033, half_length: 0.06}
+    mass: 0.05
+    friction: 0.5
+    restitution: 0.3
+    rolling_friction: 0.0005
+    motion: roll
+    # lie on its side: rotate local Z (cylinder axis) onto world Y, roll along world X
+    rest_rotation: [0.70710678, 0.70710678, 0.0, 0.0]
+    forward_axis: [1.0, 0.0, 0.0]
+    appearances:
+      silver: {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.7, 0.7, 0.72]}}, preview_color: [0.72, 0.72, 0.75]}
+      orange: {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.9, 0.35, 0.02]}}, preview_color: [0.95, 0.45, 0.05]}
+      purple: {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.4, 0.05, 0.6]}}, preview_color: [0.45, 0.1, 0.65]}
+  Block:
+    prompt_name: toy block
+    ue_mesh: /Engine/BasicShapes/Cube
+    scale: [0.12, 0.07, 0.06]
+    shape: {type: box, size: [0.12, 0.07, 0.06]}
+    mass: 0.12
+    friction: 0.08     # low friction slider, like a toy car on wheels
+    friction_combine: min
+    restitution: 0.2
+    motion: slide
+    appearances:
+      yellow: {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.9, 0.75, 0.05]}}, preview_color: [0.95, 0.8, 0.1]}
+      black:  {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.03, 0.03, 0.03]}}, preview_color: [0.12, 0.12, 0.12]}
+      teal:   {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.05, 0.55, 0.55]}}, preview_color: [0.1, 0.6, 0.6]}
+
+props:
+  Cup:
+    prompt_name: cup
+    tags: [collision]
+    ue_mesh: /Engine/BasicShapes/Cylinder
+    scale: [0.08, 0.08, 0.1]
+    shape: {type: cylinder, radius: 0.04, half_length: 0.05}
+    mass: 0.2
+    friction: 0.5
+    restitution: 0.2
+    dynamic: true
+    appearances:
+      white: {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.9, 0.9, 0.88]}}, preview_color: [0.92, 0.92, 0.9]}
+  Pillar:
+    prompt_name: box
+    tags: [occlusion]
+    ue_mesh: /Engine/BasicShapes/Cube
+    scale: [0.16, 0.16, 0.3]
+    shape: {type: box, size: [0.16, 0.16, 0.3]}
+    mass: 3.0
+    dynamic: false
+    appearances:
+      grey: {material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.35, 0.35, 0.38]}}, preview_color: [0.4, 0.4, 0.43]}

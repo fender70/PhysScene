@@ -1,0 +1,29 @@
+# CRONOS-style experiment TEMPLATE: events x scenes x objects x appearances x views,
+# plus alternative futures. Point `catalog`/`levels` at your own assets and
+# level manifests; the factor names match the CRONOS evaluation config.
+name: cronos_like
+seed: 0
+catalog: catalog_cronos_template.yaml
+levels:
+  - levels/templates/kitchen_template.yaml
+design:
+  events: [fall, collision, occlusion]
+  objects: [Can, TennisBall, ToyTruck, SoccerBall, Bottle]
+  appearances: all
+  views: 3
+render:
+  fps: 16
+  num_frames: 81            # ~5 s, a common clip length for open video generators
+  resolution: [1280, 720]
+  passes: [rgb, mask, depth]
+  temporal_samples: 8
+futures:
+  count: 4
+  perturb:
+    friction: {rel: 0.3}
+    restitution: {rel: 0.3}
+    mass: {rel: 0.3}
+    rolling_friction: {rel: 0.5}
+    surface.friction: {rel: 0.3}
+    collider.mass: {rel: 0.5}
+    initial_speed: {rel: 0.05}

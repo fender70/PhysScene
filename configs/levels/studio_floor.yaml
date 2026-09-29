@@ -1,0 +1,29 @@
+name: studio_floor
+ue_map: /Engine/Maps/Templates/Template_Default
+build_geometry: true
+floor_z: 0.0
+surfaces:
+  counter:
+    center: [0.0, 0.0, 0.92]
+    size: [2.0, 0.6]
+    thickness: 0.04
+    friction: 0.35
+    prompt_name: kitchen counter
+    ue_material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.8, 0.8, 0.78]}}
+  rug:
+    center: [0.0, 1.4, 0.005]
+    size: [2.4, 1.6]
+    thickness: 0.01
+    friction: 0.7
+    elevated: false
+    prompt_name: wooden floor
+    ue_material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.5, 0.33, 0.2]}}
+camera:
+  distance: [0.9, 4.5]
+  elevation_deg: [12, 40]
+  hfov_deg: [45, 60]
+  min_height: 0.2
+events:
+  fall: {surface: counter}
+  collision: {surface: rug, prop: Cup}
+  occlusion: {surface: rug, prop: Pillar}

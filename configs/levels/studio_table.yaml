@@ -1,0 +1,23 @@
+# A procedurally built level. `build_geometry: true` makes the Unreal driver
+# spawn the surfaces and colliders below as meshes (in the Level Sequence), on
+# top of a stock engine template map. Nothing has to be modelled by hand.
+name: studio_table
+ue_map: /Engine/Maps/Templates/Template_Default
+build_geometry: true
+floor_z: 0.0
+surfaces:
+  table:
+    center: [0.0, 0.0, 0.75]      # centre of the table TOP (metres, right-handed Z-up)
+    size: [1.6, 0.9]
+    thickness: 0.05
+    friction: 0.45
+    prompt_name: wooden table
+    ue_material: {base: /Engine/BasicShapes/BasicShapeMaterial, vector_params: {Color: [0.45, 0.28, 0.14]}}
+camera:
+  distance: [0.9, 4.0]
+  elevation_deg: [12, 38]
+  hfov_deg: [45, 60]
+  min_height: 0.3
+events:
+  collision: {prop: Cup}
+  occlusion: {prop: Pillar}

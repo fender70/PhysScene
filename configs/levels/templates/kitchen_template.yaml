@@ -1,0 +1,38 @@
+# Level manifest TEMPLATE for an existing Unreal level.
+#
+# Easiest way to make one: open your level, tag the table/counter actors with
+# `PhysSceneSurface` (and optional `PhysScenePrompt=kitchen counter`), then in
+# the editor Python console run
+#     import physscene_ue.level_export as le; le.export_level("kitchen.yaml", name="kitchen")
+# The numbers below are placeholders showing the format.
+name: kitchen
+ue_map: /Game/Levels/Kitchen/Kitchen     # <- your map
+floor_z: 0.0
+surfaces:
+  counter:
+    center: [1.20, -0.40, 0.90]
+    size: [2.40, 0.65]
+    yaw_deg: 0
+    friction: 0.4
+    prompt_name: kitchen counter
+  table:
+    center: [-0.60, 1.10, 0.76]
+    size: [1.60, 0.90]
+    yaw_deg: 15
+    friction: 0.45
+    prompt_name: wooden table
+colliders:
+  - name: back_wall
+    shape: {type: box, size: [4.0, 0.1, 2.5]}
+    center: [1.2, -0.85, 1.25]
+camera:
+  distance: [0.8, 3.5]
+  elevation_deg: [10, 35]
+  hfov_deg: [45, 60]
+  bounds_min: [-2.5, -0.8, 0.2]
+  bounds_max: [3.0, 3.0, 2.3]
+hide_actors: []            # labels of actors to hide while rendering
+events:
+  fall: {surface: counter}
+  collision: {surface: table, prop: BlueCeramicCup}
+  occlusion: {surface: table, prop: BlackWaterJar}

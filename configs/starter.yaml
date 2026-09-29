@@ -1,0 +1,50 @@
+# Starter experiment: a CRONOS-style intervention grid built entirely from
+# engine basic shapes. Try it with the preview renderer (no Unreal needed):
+#   physscene run configs/starter.yaml -o out/starter --renderer preview
+name: starter
+seed: 7
+catalog: catalog_starter.yaml
+levels:
+  - levels/studio_table.yaml
+  - levels/studio_floor.yaml
+
+design:
+  events: [fall, collision, occlusion]
+  scenes: [studio_table, studio_floor]
+  objects: [Ball, Can, Block]
+  appearances: all            # or {Ball: [red, blue]}
+  views: 3
+  sampling: full              # or an integer N to subsample the factorial grid
+
+render:
+  fps: 24
+  num_frames: 72              # 3 s clips
+  resolution: [1280, 720]
+  passes: [rgb, mask, depth]
+  spatial_samples: 1
+  temporal_samples: 8
+  warmup_frames: 32
+
+physics:
+  backend: mujoco
+  timestep: 0.001
+
+# Alternative futures: same frame 0, resampled hidden physics.
+futures:
+  count: 3
+  require_same_event: true
+  perturb:
+    friction: {rel: 0.3}
+    restitution: {rel: 0.3}
+    rolling_friction: {rel: 0.5}
+    mass: {rel: 0.3}
+    surface.friction: {rel: 0.3}
+    initial_speed: {rel: 0.08}
+    initial_direction_deg: {abs: 3}
+
+events:
+  fall: {distance_to_edge: [0.2, 0.5]}
+  collision: {distance: [0.25, 0.55]}
+
+checks:
+  event_window: [0.12, 0.88]

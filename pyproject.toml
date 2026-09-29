@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "physscene"
+version = "0.1.0"
+description = "Automated, reproducible generation of physics-event video benchmarks (CRONOS-style counterfactual interventions) with Unreal Engine 5"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [{name = "Cedric Zarate"}]
+keywords = ["synthetic data", "unreal engine", "physics", "video generation", "benchmark", "counterfactual", "world models"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "numpy>=1.23",
+  "pyyaml>=6",
+  "mujoco>=3.0",
+  "pillow>=9",
+  "imageio>=2.28",
+  "imageio-ffmpeg>=0.4.8",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib>=3.6"]
+exr = ["OpenEXR>=3.2"]
+dev = ["pytest>=7", "matplotlib>=3.6"]
+
+[project.scripts]
+physscene = "physscene.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/fender70/PhysScene"
+
+[tool.setuptools.packages.find]
+include = ["physscene*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,112 @@
+# CRONOS-style asset catalog TEMPLATE.
+#
+# The object keys, prompt names and appearances follow the public CRONOS
+# evaluation config (github.com/GenIntel/CRONOS-benchmark, config.py), so
+# datasets generated with this catalog plug into that evaluation code.
+#
+# Replace every `ue_mesh` / material path with assets from your own project
+# (Fab / Quixel / your own models). Dimensions and masses are typical
+# real-world values; adjust them to your meshes. `pivot_offset` = centre of
+# the collision primitive relative to the mesh pivot (metres, right-handed).
+objects:
+  Can:
+    prompt_name: can
+    ue_mesh: /Game/Assets/Can/SM_Can
+    shape: {type: cylinder, radius: 0.033, half_length: 0.061}
+    pivot_offset: [0, 0, 0.061]          # typical: pivot at the bottom of the can
+    mass: 0.35
+    friction: 0.4
+    restitution: 0.25
+    rolling_friction: 0.0004
+    motion: roll
+    rest_rotation: [0.70710678, 0.70710678, 0, 0]
+    appearances:
+      tin:        {material: /Game/Assets/Can/MI_Can_Tin, preview_color: [0.75, 0.75, 0.78]}
+      blue tin:   {material: /Game/Assets/Can/MI_Can_Blue, preview_color: [0.15, 0.3, 0.8]}
+      brown tin:  {material: /Game/Assets/Can/MI_Can_Brown, preview_color: [0.45, 0.28, 0.12]}
+  TennisBall:
+    prompt_name: tennis ball
+    ue_mesh: /Game/Assets/TennisBall/SM_TennisBall
+    shape: {type: sphere, radius: 0.0335}
+    mass: 0.058
+    friction: 0.7
+    restitution: 0.72
+    rolling_friction: 0.0006
+    appearances:
+      green:      {material: /Game/Assets/TennisBall/MI_Green, preview_color: [0.75, 0.9, 0.2]}
+      orange:     {material: /Game/Assets/TennisBall/MI_Orange, preview_color: [0.95, 0.5, 0.1]}
+      dark green: {material: /Game/Assets/TennisBall/MI_DarkGreen, preview_color: [0.2, 0.45, 0.15]}
+  ToyTruck:
+    prompt_name: toy SUV
+    ue_mesh: /Game/Assets/ToyTruck/SM_ToyTruck
+    shape: {type: box, size: [0.2, 0.1, 0.09]}
+    pivot_offset: [0, 0, 0.045]
+    mass: 0.3
+    friction: 0.02                       # ~ rolling resistance of toy-car wheels
+    friction_combine: min                # wheels: low effective friction
+    restitution: 0.2
+    motion: slide
+    appearances:
+      yellow: {material: /Game/Assets/ToyTruck/MI_Yellow, preview_color: [0.95, 0.8, 0.1]}
+      red:    {material: /Game/Assets/ToyTruck/MI_Red, preview_color: [0.85, 0.1, 0.1]}
+      black:  {material: /Game/Assets/ToyTruck/MI_Black, preview_color: [0.1, 0.1, 0.1]}
+  SoccerBall:
+    prompt_name: soccer ball
+    ue_mesh: /Game/Assets/SoccerBall/SM_SoccerBall
+    shape: {type: sphere, radius: 0.11}
+    mass: 0.43
+    friction: 0.6
+    restitution: 0.7
+    rolling_friction: 0.0015
+    appearances:
+      white and black: {material: /Game/Assets/SoccerBall/MI_WhiteBlack, preview_color: [0.9, 0.9, 0.9]}
+      blue and black:  {material: /Game/Assets/SoccerBall/MI_BlueBlack, preview_color: [0.2, 0.3, 0.8]}
+      red and black:   {material: /Game/Assets/SoccerBall/MI_RedBlack, preview_color: [0.8, 0.15, 0.15]}
+  Bottle:
+    prompt_name: water bottle
+    ue_mesh: /Game/Assets/Bottle/SM_Bottle
+    shape: {type: cylinder, radius: 0.035, half_length: 0.11}
+    pivot_offset: [0, 0, 0.11]
+    mass: 0.5
+    friction: 0.4
+    restitution: 0.3
+    rolling_friction: 0.0005
+    rest_rotation: [0.70710678, 0.70710678, 0, 0]
+    appearances:
+      orange plastic: {material: /Game/Assets/Bottle/MI_Orange, preview_color: [0.95, 0.5, 0.1]}
+      red plastic:    {material: /Game/Assets/Bottle/MI_Red, preview_color: [0.85, 0.12, 0.12]}
+      yellow plastic: {material: /Game/Assets/Bottle/MI_Yellow, preview_color: [0.95, 0.85, 0.2]}
+
+props:
+  BlueCeramicCup:
+    prompt_name: blue ceramic cup
+    tags: [collision]
+    ue_mesh: /Game/Assets/Props/SM_Cup
+    shape: {type: cylinder, radius: 0.045, half_length: 0.05}
+    pivot_offset: [0, 0, 0.05]
+    mass: 0.3
+    appearances: {default: {preview_color: [0.2, 0.35, 0.8]}}
+  MetallicVase:
+    prompt_name: metallic vase
+    tags: [collision]
+    ue_mesh: /Game/Assets/Props/SM_Vase
+    shape: {type: cylinder, radius: 0.06, half_length: 0.12}
+    pivot_offset: [0, 0, 0.12]
+    mass: 0.8
+    appearances: {default: {preview_color: [0.7, 0.7, 0.72]}}
+  CeramicFlowerPot:
+    prompt_name: ceramic flower pot
+    tags: [collision, occlusion]
+    ue_mesh: /Game/Assets/Props/SM_FlowerPot
+    shape: {type: cylinder, radius: 0.1, half_length: 0.12}
+    pivot_offset: [0, 0, 0.12]
+    mass: 1.5
+    appearances: {default: {preview_color: [0.75, 0.45, 0.3]}}
+  BlackWaterJar:
+    prompt_name: black water jar
+    tags: [occlusion]
+    ue_mesh: /Game/Assets/Props/SM_WaterJar
+    shape: {type: cylinder, radius: 0.12, half_length: 0.2}
+    pivot_offset: [0, 0, 0.2]
+    dynamic: false
+    appearances: {default: {preview_color: [0.1, 0.1, 0.12]}}
