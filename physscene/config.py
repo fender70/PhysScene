@@ -70,6 +70,54 @@ class FuturesSettings:
 
 
 @dataclass
+class BenchmarkSettings:
+    """Physical-validity benchmark: each reference gets matched-prefix candidates.
+
+    * ``prefix_frames``: frames 0..P are identical in every candidate (the
+      conditioning prefix). The key event must happen after it.
+    * ``valid``: alternative futures that branch at P with resampled hidden
+      parameters (no state edits).
+    * ``invalid``: controlled violations after P, as ``{type: [severity, ...]}``.
+    """
+
+    enabled: bool = False
+    prefix_frames: int = 24
+    valid_count: int = 2
+    valid_perturb: dict[str, Perturbation] = field(default_factory=dict)
+    valid_min_divergence: float = 0.02
+    valid_max_attempts: int = 20
+    invalid: dict[str, list[str]] = field(default_factory=dict)
+    invalid_min_divergence: float = 0.03
+    # Keep only violations the independent validator confirms (and only valid
+    # candidates it accepts), so every label has two independent sources.
+    require_validator: bool = True
+    # Restrict violation types to events where they are visible,
+    # e.g. {gravity: [fall]}. On a table top, weaker gravity looks like lower friction.
+    applicable_events: dict[str, list[str]] = field(default_factory=lambda: {"gravity": ["fall"]})
+    validator_tol: dict[str, float] = field(default_factory=dict)
+
+    @staticmethod
+    def from_dict(d: dict | None) -> "BenchmarkSettings":
+        if not d:
+            return BenchmarkSettings()
+        v = d.get("valid", {}) or {}
+        inv = d.get("invalid", {}) or {}
+        return BenchmarkSettings(
+            enabled=True,
+            prefix_frames=int(d.get("prefix_frames", 24)),
+            valid_count=int(v.get("count", 2)),
+            valid_perturb={k: Perturbation.from_dict(x) for k, x in (v.get("perturb") or {}).items()},
+            valid_min_divergence=float(v.get("min_divergence", 0.02)),
+            valid_max_attempts=int(v.get("max_attempts", 20)),
+            invalid={k: list(x) if isinstance(x, (list, tuple)) else [x] for k, x in (inv.get("types") or {}).items()},
+            invalid_min_divergence=float(inv.get("min_divergence", 0.03)),
+            require_validator=bool(d.get("require_validator", True)),
+            applicable_events=dict(inv.get("applicable_events", {"gravity": ["fall"]})),
+            validator_tol=dict(d.get("validator_tol", {}) or {}),
+        )
+
+
+@dataclass
 class DesignSettings:
     events: list[str] = field(default_factory=lambda: ["fall", "collision", "occlusion"])
     scenes: list[str] = field(default_factory=list)  # level names; empty = all levels
@@ -94,6 +142,7 @@ class ExperimentConfig:
     events: dict[str, dict[str, Any]]  # per-event template parameters
     checks: dict[str, Any]
     output_layout: str = "cronos"
+    benchmark: BenchmarkSettings = field(default_factory=BenchmarkSettings)
     source_path: Path | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -166,6 +215,7 @@ class ExperimentConfig:
             events=d.get("events", {}) or {},
             checks=d.get("checks", {}) or {},
             output_layout=d.get("output_layout", "cronos"),
+            benchmark=BenchmarkSettings.from_dict(d.get("benchmark")),
             source_path=path,
             raw=d,
         )

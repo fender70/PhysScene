@@ -17,6 +17,10 @@ render:
   resolution: [1280, 720]
   passes: [rgb, mask, depth]
   temporal_samples: 8
+events:                     # ~5 s clips: keep the key moment in the first half
+  fall: {event_time_frac: [0.25, 0.45]}
+  collision: {event_time_frac: [0.25, 0.45]}
+  occlusion: {event_time_frac: [0.2, 0.4]}
 futures:
   count: 4
   perturb:

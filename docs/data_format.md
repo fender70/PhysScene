@@ -31,6 +31,8 @@ dataset/<event>/<scene>/<object>/<appearance>/<view>/
   states.json
   annotations.json
   alternatives/f01/ ...         same structure, same frame 0, different hidden physics
+  violations/<type>_<severity>/ physically invalid candidate (benchmark mode), same structure
+dataset/benchmark/              pairs.jsonl, summary.json, frozen_manifest.json, GATE_REPORT.md (benchmark mode)
 dataset/cronos_config.json      SURFACE_DICT / EXTRA_ELEMENTS / OBJECT_NAMES / OBJECT_APPEARANCES
 dataset/plan.json
 ```
@@ -43,6 +45,13 @@ fields (`object_name`, `appearance_name`, `surface_name`, `collider_name` /
 `occluder_name`), `fps`, `num_frames`, `resolution`, `event_frame` (the
 frame where the key moment happens), `physics` (all parameters),
 `mask_bodies`, `seed`, `group_id` and `job_id`.
+
+In benchmark mode, `candidate` holds `{id, kind: reference|valid|invalid,
+prefix_frames, branch_frame, violation: {type, severity, value, onset_frame},
+divergence_m, applied (resampled parameters), validator (independent verdict)}`,
+and `label` is `valid` or `invalid`. `provenance` records the PhysScene
+version and commit, the config and input SHA-256, the MuJoCo version,
+the job fingerprint, the renderer and the render settings.
 
 ### `camera.json`
 
@@ -59,7 +68,11 @@ frame where the key moment happens), `physics` (all parameters),
 * `trajectory`: per-frame positions, quaternions (wxyz), linear velocities and
   contact pairs.
 * `unreal_keys`: per-frame actor location (cm) and rotation (roll, pitch, yaw
-  in degrees), exactly as rendered.
+  in degrees), exactly as rendered. Frames where a body is invisible (`vanish`)
+  park it far below the level.
+* `shapes`, `world`: collision primitives and support geometry, so the state
+  can be validated without the plan (`physscene.validator.validate_states_file`).
+* `trajectory.visible` (optional): per-frame visibility per body.
 
 ## Coordinate conventions
 

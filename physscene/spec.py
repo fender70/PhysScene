@@ -110,6 +110,48 @@ class Trajectory:
     quats: dict[str, list[list[float]]]  # name -> [T][4]
     contacts: list[list[list[str]]] = field(default_factory=list)  # [T] list of [a, b] pairs
     lin_vel: dict[str, list[list[float]]] = field(default_factory=dict)
+    ang_vel_local: dict[str, list[list[float]]] = field(default_factory=dict)  # body-frame omega
+    # Per-frame visibility (absent = always visible). Used by "vanish" violations.
+    visible: dict[str, list[bool]] = field(default_factory=dict)
+
+    def is_visible(self, name: str, frame: int) -> bool:
+        v = self.visible.get(name)
+        return True if v is None else bool(v[frame])
+
+    def state_at(self, frame: int) -> dict[str, dict]:
+        """Exact per-body state at ``frame`` (for branching a new simulation)."""
+        out = {}
+        for n in self.names:
+            out[n] = {
+                "position": self.positions[n][frame],
+                "quat": self.quats[n][frame],
+                "lin_vel": self.lin_vel[n][frame] if self.lin_vel else [0.0, 0.0, 0.0],
+                "ang_vel_local": self.ang_vel_local[n][frame] if self.ang_vel_local else [0.0, 0.0, 0.0],
+            }
+        return out
+
+    def splice(self, other: "Trajectory", start: int) -> "Trajectory":
+        """Frames ``[0, start)`` from self followed by ``other`` (whose frame 0 is frame ``start``)."""
+        def cat(a, b):
+            return {n: a[n][:start] + b[n] for n in self.names} if a and b else {}
+
+        vis = {}
+        if self.visible or other.visible:
+            T = start + other.num_frames
+            for n in self.names:
+                va = self.visible.get(n, [True] * self.num_frames)[:start]
+                vb = other.visible.get(n, [True] * other.num_frames)
+                vis[n] = (va + vb)[:T]
+        return Trajectory(
+            fps=self.fps,
+            names=list(self.names),
+            positions=cat(self.positions, other.positions),
+            quats=cat(self.quats, other.quats),
+            contacts=self.contacts[:start] + other.contacts,
+            lin_vel=cat(self.lin_vel, other.lin_vel),
+            ang_vel_local=cat(self.ang_vel_local, other.ang_vel_local),
+            visible=vis,
+        )
 
     @property
     def num_frames(self) -> int:

@@ -44,6 +44,12 @@ class PhysicsBackend(ABC):
         num_frames: int,
         timestep: float = 0.001,
         pre_roll: float = 0.0,
+        init_state: dict[str, dict] | None = None,
+        exclude_pairs: set[frozenset[str]] | None = None,
     ) -> Trajectory:
         """Simulate and return poses sampled at ``fps`` for ``num_frames`` frames.
-        Frame 0 is the state at ``t = pre_roll``."""
+        Frame 0 is the state at ``t = pre_roll``.
+
+        ``init_state`` (name -> position, quat, lin_vel, ang_vel_local) overrides
+        the layout's initial state, which lets a simulation branch from a
+        recorded frame. ``exclude_pairs`` disables contacts between geom pairs."""

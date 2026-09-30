@@ -60,7 +60,14 @@ def _solref(restitution: float, dt: float) -> str:
     return f"{tc:.6g} {restitution_to_dampratio(restitution):.6g}"
 
 
-def build_mjcf(layout: Layout, params: PhysicalParams, level: Level, catalog: Catalog, timestep: float) -> str:
+def build_mjcf(
+    layout: Layout,
+    params: PhysicalParams,
+    level: Level,
+    catalog: Catalog,
+    timestep: float,
+    exclude_pairs: set[frozenset[str]] | None = None,
+) -> str:
     """Build the MJCF model.
 
     Every contact is declared as an explicit ``<pair>`` so we control how the
@@ -69,7 +76,11 @@ def build_mjcf(layout: Layout, params: PhysicalParams, level: Level, catalog: Ca
     honour per-asset ``friction_combine`` / ``restitution_combine`` like
     Unreal physical materials do. (MuJoCo's default would take the max
     friction, so a low-friction toy car on a wooden table could never
-    slide.) Rolling and torsional friction come from the dynamic body."""
+    slide.) Rolling and torsional friction come from the dynamic body.
+
+    ``exclude_pairs`` disables contacts between the given geom pairs (used to
+    synthesise interpenetration violations)."""
+    exclude_pairs = exclude_pairs or set()
     surf = level.surfaces[layout.surface]
     sshape, scenter, squat = surf.box_shape()
     nocol = 'contype="0" conaffinity="0"'
@@ -111,6 +122,8 @@ def build_mjcf(layout: Layout, params: PhysicalParams, level: Level, catalog: Ca
     lines.append("  <contact>")
 
     def pair(a: str, b: str, pa: tuple, pb: tuple, roll: float, tors: float):
+        if frozenset((a, b)) in exclude_pairs:
+            return
         f = combine(pa[0], pb[0], pa[2], pb[2])
         e = combine(pa[1], pb[1], pa[3], pb[3])
         lines.append(
@@ -147,10 +160,12 @@ class MujocoBackend(PhysicsBackend):
         num_frames: int,
         timestep: float = 0.001,
         pre_roll: float = 0.0,
+        init_state: dict[str, dict] | None = None,
+        exclude_pairs: set[frozenset[str]] | None = None,
     ) -> Trajectory:
         import mujoco
 
-        xml = build_mjcf(layout, params, level, catalog, timestep)
+        xml = build_mjcf(layout, params, level, catalog, timestep, exclude_pairs)
         model = mujoco.MjModel.from_xml_string(xml)
         data = mujoco.MjData(model)
 
@@ -163,6 +178,12 @@ class MujocoBackend(PhysicsBackend):
             r = quat_to_matrix(b.quat)
             data.qvel[va : va + 3] = b.lin_vel
             data.qvel[va + 3 : va + 6] = r.T @ np.asarray(b.ang_vel, float)  # free-joint omega is body-local
+            if init_state and b.name in init_state:  # branch from an exact recorded state
+                st = init_state[b.name]
+                data.qpos[qa : qa + 3] = st["position"]
+                data.qpos[qa + 3 : qa + 7] = st["quat"]
+                data.qvel[va : va + 3] = st["lin_vel"]
+                data.qvel[va + 3 : va + 6] = st["ang_vel_local"]
         # The joint's damping attribute covers all six dofs; give the rotational
         # dofs their own angular damping instead.
         for b in dyn:
@@ -185,6 +206,7 @@ class MujocoBackend(PhysicsBackend):
         positions = {n: [] for n in names}
         quats = {n: [] for n in names}
         lin_vel = {n: [] for n in names}
+        ang_vel_local = {n: [] for n in names}
         contacts: list[list[list[str]]] = []
 
         def record(frame_contacts: set[tuple[str, str]]):
@@ -196,10 +218,12 @@ class MujocoBackend(PhysicsBackend):
                     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{n}_free")
                     va = model.jnt_dofadr[jid]
                     lin_vel[n].append(data.qvel[va : va + 3].tolist())
+                    ang_vel_local[n].append(data.qvel[va + 3 : va + 6].tolist())
                 else:
                     positions[n].append(static_pose[n][0])
                     quats[n].append(static_pose[n][1])
                     lin_vel[n].append([0.0, 0.0, 0.0])
+                    ang_vel_local[n].append([0.0, 0.0, 0.0])
             contacts.append(sorted([list(p) for p in frame_contacts]))
 
         def current_contacts() -> set[tuple[str, str]]:
@@ -219,5 +243,11 @@ class MujocoBackend(PhysicsBackend):
             record(acc)
 
         return Trajectory(
-            fps=fps, names=names, positions=positions, quats=quats, contacts=contacts, lin_vel=lin_vel
+            fps=fps,
+            names=names,
+            positions=positions,
+            quats=quats,
+            contacts=contacts,
+            lin_vel=lin_vel,
+            ang_vel_local=ang_vel_local,
         )

@@ -57,6 +57,14 @@ restitution, mass, surface friction, sub-perceptual push noise).</em></p>
   parameters, keeps frame 0 identical, and re-verifies the event.
 * **Full simulator state.** Every sample ships its layout, parameters,
   per-frame poses, Unreal keys and camera intrinsics and extrinsics.
+* **Physical-validity benchmarks.** Every reference clip can get
+  matched-prefix candidates: valid alternative futures (resampled hidden physics)
+  and controlled violations (teleport, speed jump, wrong gravity, freeze, time
+  reversal, vanishing, penetration) at graded severities. Each label is
+  re-derived by an **independent state validator**, and `physscene gate`
+  writes a decision-gate report covering reproducibility, parameter control,
+  independent validation, counterfactual visuals, batch stability and provenance.
+  See [docs/validity_benchmark.md](docs/validity_benchmark.md).
 * **CRONOS-compatible output.** `metadata.json`, `mask/frame_0000.jpg` and
   `movies/complete.mp4` follow the CRONOS evaluation code layout, and
   `cronos_config.json` gives the prompt dictionaries.
@@ -81,6 +89,13 @@ physscene inspect out/starter/plan              # summary + top-down layout plot
 physscene render out/starter/plan --renderer preview --workers 8
 physscene export out/starter/plan -o out/starter/dataset
 physscene validate out/starter/dataset
+```
+
+A physical-validity pilot (references, valid alternatives and violations, plus a decision-gate report):
+
+```bash
+physscene run  configs/validity_pilot.yaml -o out/pilot --renderer preview --workers 8
+physscene gate out/pilot/plan out/pilot/dataset     # -> out/pilot/dataset/benchmark/GATE_REPORT.md
 ```
 
 The starter experiment is 3 events × 2 scenes × 3 objects × 3 appearances ×
@@ -129,6 +144,10 @@ physscene/           planner (pure Python)
   physics/           MuJoCo backend (Unreal-style friction/restitution combine modes)
   camera.py          event-aware static camera sampling
   checks.py          physics + visibility verification
+  violations.py      matched-prefix valid alternatives and physics violations
+  validator.py       independent physics-law validator (states only)
+  benchmark.py       reference + candidate construction
+  gate.py            decision-gate report
   planner.py         design grid, rejection sampling, push calibration, futures, job writer
   preview.py         numpy ray-cast preview renderer
   export.py          raw renders → dataset (mp4, masks, depth, camera, states)
@@ -144,6 +163,7 @@ tests/               unit + end-to-end tests (incl. the UE driver against a mock
 ## Documentation
 
 * [Related work & the automation gap](docs/related_work.md)
+* [Physical-validity benchmarks: candidates, validator, decision gate](docs/validity_benchmark.md)
 * [Unreal Engine setup](docs/unreal_setup.md)
 * [Data format & conventions](docs/data_format.md)
 * [Extending: new events, interventions, backends, renderers](docs/extending.md)

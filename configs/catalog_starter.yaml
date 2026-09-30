@@ -45,7 +45,7 @@ objects:
     scale: [0.12, 0.07, 0.06]
     shape: {type: box, size: [0.12, 0.07, 0.06]}
     mass: 0.12
-    friction: 0.08     # low friction slider, like a toy car on wheels
+    friction: 0.03     # low friction slider, like a toy car on wheels
     friction_combine: min
     restitution: 0.2
     motion: slide

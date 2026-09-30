@@ -38,12 +38,17 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "heading_mode": "long_axis",
         "long_axis_jitter_deg": 35.0,
     },
-    "fall": {"distance_to_edge": [0.2, 0.6]},
-    "collision": {"distance": [0.3, 0.7], "lateral_offset_frac": [-0.3, 0.3], "props": []},
+    # Placement is *kinematic* by default: the template picks when the key
+    # moment happens (event_time_frac) and how fast the object is moving at that
+    # moment, then solves for the push and the distance from an estimate of the
+    # object's deceleration. Setting distance_to_edge / distance / travel_frac
+    # switches to the older fixed-distance placement.
+    "fall": {"edge_speed": [0.25, 0.6]},  # m/s when rolling off the edge
+    "collision": {"impact_speed": [0.5, 1.2], "lateral_offset_frac": [-0.3, 0.3], "props": []},
     "occlusion": {
-        "travel_frac": [0.45, 0.8],  # fraction of the available straight run used by the clip
+        "pass_speed": [0.2, 0.45],  # m/s when passing behind the occluder
         "occluder_clearance": [0.04, 0.15],  # lateral gap between object path and occluder
-        "occluder_position_frac": [0.4, 0.6],
+        "occluder_position_frac": [0.4, 0.6],  # distance placement only
         "props": [],
     },
 }
@@ -178,6 +183,30 @@ def _sample_heading(ctx: EventContext) -> float:
     return base + math.radians(ctx.rng.uniform(-1, 1) * ctx.p("long_axis_jitter_deg"))
 
 
+def decel_estimate(ctx: EventContext) -> float:
+    """Rough deceleration of the pushed object on this surface (m/s^2): sliding
+    friction for sliders, rolling resistance for rollers. Push calibration
+    corrects any residual error in simulation."""
+    from .physics.mujoco_backend import combine
+
+    obj, s = ctx.obj, ctx.surface
+    if obj.motion == "slide":
+        return combine(obj.friction, s.friction, obj.friction_combine) * G
+    h = max(obj.shape.support_height(obj.rest_rotation), 1e-3)
+    k = 0.4 if obj.shape.type == "sphere" else 0.5  # I / (m r^2)
+    return G * obj.rolling_friction / h / (1 + k)
+
+
+def solve_push(v_event: float, t_event: float, a: float) -> tuple[float, float]:
+    """Initial speed and distance so the object moves at ``v_event`` after
+    ``t_event`` seconds under constant deceleration ``a``."""
+    v0 = v_event + a * t_event
+    return v0, v0 * t_event - 0.5 * a * t_event**2
+
+
+G = 9.81
+
+
 def _inside(s: Surface, local_xy, margin: float) -> bool:
     return abs(local_xy[0]) <= s.size[0] / 2 - margin and abs(local_xy[1]) <= s.size[1] / 2 - margin
 
@@ -215,7 +244,12 @@ def fall(ctx: EventContext) -> Layout:
     direction = np.array([math.cos(heading), math.sin(heading)])
     axis = 0 if idx < 2 else 1
     half = s.size[axis] / 2
-    dist = ctx.uniform("distance_to_edge")
+    t_event = ctx.uniform("event_time_frac") * ctx.clip_duration
+    if "distance_to_edge" in ctx.params:
+        dist = ctx.uniform("distance_to_edge")
+        speed = dist / t_event
+    else:
+        speed, dist = solve_push(ctx.uniform("edge_speed"), t_event, decel_estimate(ctx))
     # start point: dist from the edge along the path, random along the edge
     along = ctx.rng.uniform(-1, 1) * (s.size[1 - axis] / 2 - margin - 0.05)
     start = np.zeros(2)
@@ -223,8 +257,7 @@ def fall(ctx: EventContext) -> Layout:
     start[1 - axis] = along - direction[1 - axis] * dist
     if not _inside(s, start, margin):
         raise ValueError("fall start outside surface")
-    t_event = ctx.uniform("event_time_frac") * ctx.clip_duration
-    speed = float(np.clip(dist / t_event, ctx.p("min_speed"), ctx.p("max_speed")))
+    speed = float(np.clip(speed, ctx.p("min_speed"), ctx.p("max_speed")))
     obj = _make_object(ctx, start, heading, speed)
     edge_local = start + direction * dist
     return Layout(
@@ -252,7 +285,13 @@ def collision(ctx: EventContext) -> Layout:
     heading = _sample_heading(ctx)
     direction = np.array([math.cos(heading), math.sin(heading)])
     lateral = np.array([-direction[1], direction[0]])
-    dist = ctx.uniform("distance") + r_o + r_p
+    t_event = ctx.uniform("event_time_frac") * ctx.clip_duration
+    if "distance" in ctx.params:
+        gap = ctx.uniform("distance")
+        speed = gap / t_event
+    else:
+        speed, gap = solve_push(ctx.uniform("impact_speed"), t_event, decel_estimate(ctx))
+    dist = gap + r_o + r_p
     lat = ctx.uniform("lateral_offset_frac") * (r_o + r_p)
     # Midpoint budget: the pair's extent projected on each surface axis, plus
     # room behind the prop for it to be pushed.
@@ -267,9 +306,7 @@ def collision(ctx: EventContext) -> Layout:
     margin = ctx.p("edge_margin")
     if not (_inside(s, start, r_o + margin) and _inside(s, prop_xy, r_p + margin)):
         raise ValueError("collision layout outside surface")
-    t_event = ctx.uniform("event_time_frac") * ctx.clip_duration
-    gap = dist - r_o - r_p
-    speed = float(np.clip(gap / t_event, ctx.p("min_speed"), ctx.p("max_speed")))
+    speed = float(np.clip(speed, ctx.p("min_speed"), ctx.p("max_speed")))
     obj = _make_object(ctx, start, heading, speed)
     prop = _make_prop(ctx, prop_xy, "collider", stencil=2)
     return Layout(
@@ -307,11 +344,31 @@ def occlusion(ctx: EventContext) -> Layout:
     start = start - direction * back
     run = _straight_run(s, start, direction, margin)
     min_travel = 2.5 * (r_o + r_p)  # enough to go from visible, to hidden, to visible again
-    travel = max(ctx.uniform("travel_frac") * run, min(min_travel, run))
-    if travel < min_travel:
-        raise ValueError("not enough straight run for occlusion")
-    occ_frac = ctx.uniform("occluder_position_frac")
-    occ_xy = start + direction * travel * occ_frac + lateral * lat_off
+    if "travel_frac" in ctx.params:
+        travel = max(ctx.uniform("travel_frac") * run, min(min_travel, run))
+        if travel < min_travel:
+            raise ValueError("not enough straight run for occlusion")
+        occ_frac = ctx.uniform("occluder_position_frac")
+        occ_dist = travel * occ_frac
+        speed = travel / ctx.clip_duration
+        t_cross = occ_frac * ctx.clip_duration
+    else:
+        a = decel_estimate(ctx)
+        t_cross = ctx.uniform("event_time_frac") * ctx.clip_duration
+        beyond = 1.3 * (r_o + r_p)  # must travel at least this far past the occluder to reappear
+        v_c = ctx.uniform("pass_speed")
+        if a > 1e-6:
+            v_c = max(v_c, 1.2 * math.sqrt(2 * a * beyond))
+        speed, occ_dist = solve_push(v_c, t_cross, a)
+        after = v_c * (ctx.clip_duration - t_cross)
+        if a > 1e-6:
+            after = min(after, v_c**2 / (2 * a))
+        travel = occ_dist + max(after, beyond)
+        if travel > run:
+            raise ValueError("not enough straight run for occlusion")
+        slack = run - travel
+        start = start + direction * ctx.rng.uniform(0, slack)
+    occ_xy = start + direction * occ_dist + lateral * lat_off
     # If the occluder hangs over the edge, slide the whole layout sideways.
     end = start + direction * travel
     for step in np.arange(0.0, 0.6, 0.02):
@@ -322,7 +379,7 @@ def occlusion(ctx: EventContext) -> Layout:
             break
     else:
         raise ValueError("occluder outside surface")
-    speed = float(np.clip(travel / ctx.clip_duration, ctx.p("min_speed"), ctx.p("max_speed")))
+    speed = float(np.clip(speed, ctx.p("min_speed"), ctx.p("max_speed")))
     obj = _make_object(ctx, start, heading, speed)
     occ = _make_prop(ctx, occ_xy, "occluder", stencil=2)
     return Layout(
@@ -335,6 +392,6 @@ def occlusion(ctx: EventContext) -> Layout:
             "occluder_side": s.dir_to_world(lateral * side).tolist(),
             "travel": travel,
             "speed": speed,
-            "expected_event_time": occ_frac * ctx.clip_duration,
+            "expected_event_time": t_cross,
         },
     )

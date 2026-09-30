@@ -32,6 +32,9 @@ DEFAULT_CHECKS: dict[str, Any] = {
     "reappear_visibility": 0.6,
     "general_min_visibility": 0.5,
     "visibility_samples": 48,
+    # A collision must visibly move a dynamic collider (m); 0 disables the check.
+    "min_collider_displacement": 0.01,
+    "min_velocity_change": 0.25,  # m/s change of the object's velocity at impact
 }
 
 
@@ -94,6 +97,18 @@ def check_physics(
             return CheckResult(False, f"collision at frame {t_hit} outside window [{lo},{hi}]", hint="faster" if t_hit > hi else "slower")
         if not s.contains_xy(obj[t_hit]):
             return CheckResult(False, "object left the surface before colliding")
+        if p["min_collider_displacement"] > 0:
+            # Visible either as the collider moving, or as the object bouncing / deflecting.
+            col = traj.pos("collider")
+            moved = float(np.max(np.linalg.norm(col - col[0], axis=1)))
+            a, b = max(0, t_hit - 3), min(T - 1, t_hit + 3)
+            v_before = (obj[t_hit] - obj[a]) / max(1, t_hit - a)
+            v_after = (obj[b] - obj[t_hit]) / max(1, b - t_hit)
+            dv = float(np.linalg.norm(v_after - v_before)) * traj.fps
+            if moved < p["min_collider_displacement"] and dv < p["min_velocity_change"]:
+                return CheckResult(
+                    False, f"collision too gentle (collider moved {moved * 100:.1f} cm, object dv {dv:.2f} m/s)", hint="faster"
+                )
         return CheckResult(True, info={"event_frame": t_hit})
 
     if layout.event == "occlusion":

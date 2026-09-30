@@ -34,6 +34,9 @@ from .config import ExperimentConfig, Perturbation
 from .events import EVENT_REGISTRY, EventContext, event_params
 from .geometry import quat_from_yaw, quat_mul, quat_to_ue_rotator, rotate, to_ue_location, unwrap_degrees
 from .physics import default_params, get_backend
+from .violations import FAR_AWAY
+from .benchmark import world_geometry
+from .provenance import provenance_info
 from .spec import CameraSpec, Layout, PhysicalParams, Trajectory, stable_id, to_json
 
 log = logging.getLogger("physscene.planner")
@@ -142,9 +145,11 @@ def actor_keys(asset: Asset, traj: Trajectory, name: str) -> dict[str, list[list
     piv_q_inv = piv_q * np.array([1, -1, -1, -1])
     piv_off = np.asarray(asset.pivot_offset, float)
     locs, rots = [], []
-    for p, q in zip(traj.positions[name], traj.quats[name]):
+    for f, (p, q) in enumerate(zip(traj.positions[name], traj.quats[name])):
         qa = quat_mul(q, piv_q_inv)
         pa = np.asarray(p) - rotate(qa, piv_off)
+        if not traj.is_visible(name, f):
+            pa = np.asarray(FAR_AWAY)  # hidden: parked far below the level
         locs.append([round(v, 4) for v in to_ue_location(pa)])
         rots.append(quat_to_ue_rotator(qa))
     rots = [[round(v, 4) for v in r] for r in unwrap_degrees(rots)]
@@ -196,7 +201,15 @@ def _scale_push(layout: Layout, f: float) -> Layout:
     return lay
 
 
-def calibrate_speed(cfg: ExperimentConfig, layout: Layout, params: PhysicalParams, level: Level, ep: dict[str, Any], iters: int = 8):
+def calibrate_speed(
+    cfg: ExperimentConfig,
+    layout: Layout,
+    params: PhysicalParams,
+    level: Level,
+    ep: dict[str, Any],
+    iters: int = 8,
+    checks_cfg: dict[str, Any] | None = None,
+):
     """Simulate, and rescale the initial push until the event happens inside
     the time window. This replaces hand-tuning impulse strength per scene.
 
@@ -207,7 +220,7 @@ def calibrate_speed(cfg: ExperimentConfig, layout: Layout, params: PhysicalParam
     lo, hi = None, None  # speeds known to be too slow / too fast
     for _ in range(iters):
         traj = _simulate(cfg, layout, params, level)
-        res = check_physics(layout, traj, level, cfg.catalog, cfg.checks)
+        res = check_physics(layout, traj, level, cfg.catalog, cfg.checks if checks_cfg is None else checks_cfg)
         if res or not res.hint:
             break
         speed = float(np.linalg.norm(layout.body("object").lin_vel))
@@ -236,7 +249,14 @@ def plan_group(cfg: ExperimentConfig, event: str, scene: str, obj_key: str) -> d
     clip = cfg.render.num_frames / cfg.render.fps
     ep = event_params(event, cfg.events.get(event))
     template = EVENT_REGISTRY[event]
-    checks_cfg = cfg.checks
+    checks_cfg = dict(cfg.checks)
+    if cfg.benchmark.enabled:
+        # The key event must happen after the shared conditioning prefix.
+        from .checks import DEFAULT_CHECKS
+
+        lo, hi = checks_cfg.get("event_window", DEFAULT_CHECKS["event_window"])
+        lo = max(lo, (cfg.benchmark.prefix_frames + 3) / cfg.render.num_frames)
+        checks_cfg["event_window"] = [lo, max(hi, lo + 0.1)]
     cam_cfg = cfg.raw.get("camera", {})
     last_reason = ""
     for attempt in range(cfg.design.max_layout_attempts):
@@ -250,10 +270,19 @@ def plan_group(cfg: ExperimentConfig, event: str, scene: str, obj_key: str) -> d
             last_reason = f"template: {e}"
             continue
         params = default_params(layout, level, cfg.catalog)
-        layout, traj, res = calibrate_speed(cfg, layout, params, level, ep)
+        layout, traj, res = calibrate_speed(cfg, layout, params, level, ep, checks_cfg=checks_cfg)
         if not res:
             last_reason = f"physics: {res.reason}"
             continue
+        if cfg.benchmark.enabled and cfg.benchmark.require_validator:
+            # A reference must itself pass independent validation (this also
+            # catches simulator artefacts such as energy gained at contact edges).
+            from .benchmark import validate
+
+            verdict = validate(layout, params, traj, level, cfg.catalog, cfg.benchmark.validator_tol)
+            if not verdict.valid:
+                last_reason = f"reference failed independent validation: {verdict.summary}"
+                continue
         cams: list[CameraSpec] = []
         view_info = []
         for v in range(cfg.design.views):
@@ -280,10 +309,15 @@ def plan_group(cfg: ExperimentConfig, event: str, scene: str, obj_key: str) -> d
         if len(cams) < cfg.design.views:
             continue
 
+        candidates, bench_stats = [], {}
+        if cfg.benchmark.enabled:
+            from .benchmark import make_candidates
+
+            candidates, bench_stats = make_candidates(cfg, level, layout, params, traj, (event, scene, obj_key, attempt))
         futures = []
         fs = cfg.futures
         k = 0
-        for fa in range(fs.count * fs.max_attempts):
+        for fa in range(0 if cfg.benchmark.enabled else fs.count * fs.max_attempts):
             if k >= fs.count:
                 break
             frng = seeded_rng(cfg.seed, "future", event, scene, obj_key, attempt, fa)
@@ -308,6 +342,9 @@ def plan_group(cfg: ExperimentConfig, event: str, scene: str, obj_key: str) -> d
             "cameras": cams,
             "view_info": view_info,
             "futures": futures,
+            "candidates": candidates,
+            "bench_stats": bench_stats,
+            "checks_cfg": checks_cfg,
             "prop": prop.key if prop else None,
         }
     return {"ok": False, "reason": last_reason, "attempt": cfg.design.max_layout_attempts}
@@ -379,17 +416,23 @@ def build_job(
     obj_key: str,
     appearance: str,
     view: int,
-    future: int,
+    candidate: dict[str, Any],
     check_info: dict[str, Any],
     params: PhysicalParams,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """``candidate``: {"id": "ref" | "f01" | "<violation>_<severity>", "kind": "reference" | "valid" | "invalid", ...}."""
     level = cfg.levels[scene]
     obj = cfg.catalog.objects[obj_key]
     view_name = f"v{view}"
     out_rel = f"{event}/{scene}/{obj_key}/{appearance}/{view_name}"
-    if future > 0:
-        out_rel += f"/alternatives/f{future:02d}"
-    job_id = stable_id(cfg.name, cfg.seed, group_id, appearance, view, future)
+    cid, kind = candidate["id"], candidate["kind"]
+    if kind == "valid":
+        out_rel += f"/alternatives/{cid}"
+    elif kind == "invalid":
+        out_rel += f"/violations/{cid}"
+    future = int(cid[1:]) if kind == "valid" and cid[1:].isdigit() else (0 if kind == "reference" else None)
+    job_id = stable_id(cfg.name, cfg.seed, group_id, appearance, view, 0 if cid == "ref" else cid)
     bodies = []
     for b in layout.bodies:
         a = cfg.catalog.get(b.asset)
@@ -422,10 +465,13 @@ def build_job(
             "appearance": appearance,
             "view": view_name,
             "future": future,
+            "candidate": cid,
+            "label": "invalid" if kind == "invalid" else "valid",
         },
         "output_rel": out_rel,
         "trajectory": traj_rel,
         "level": {"name": level.name, "ue_map": level.ue_map, "hide_actors": level.hide_actors},
+        "world": world_geometry(level),
         "render": {
             "fps": r.fps,
             "num_frames": r.num_frames,
@@ -457,6 +503,9 @@ def build_job(
             "seed": cfg.seed,
             "group_id": group_id,
             "generator": "PhysScene",
+            "candidate": candidate,
+            "label": "invalid" if kind == "invalid" else "valid",
+            "provenance": provenance or {},
         },
     }
 
@@ -500,6 +549,7 @@ def plan_experiment(cfg: ExperimentConfig, out_dir: str | Path, workers: int = 1
 
     manifest = []
     summary = []
+    prov = provenance_info(cfg)
     for (e, s, o), res in results.items():
         gid = stable_id(cfg.name, cfg.seed, e, s, o)
         if not res["ok"]:
@@ -512,23 +562,50 @@ def plan_experiment(cfg: ExperimentConfig, out_dir: str | Path, workers: int = 1
         _write_json(gdir / "trajectory.json", res["traj"])
         _write_json(gdir / "cameras.json", [asdict(c) for c in res["cameras"]])
         _write_json(gdir / "check.json", {"physics": res["check"], "views": res["view_info"]})
-        variants = [(0, res["layout"], res["traj"], res["check"], res["params"], f"groups/{gid}/trajectory.json")]
+        ref_cand = {"id": "ref", "kind": "reference"}
+        if cfg.benchmark.enabled:
+            ref_cand["prefix_frames"] = cfg.benchmark.prefix_frames
+        variants = [(ref_cand, res["layout"], res["traj"], res["check"], res["params"], f"groups/{gid}/trajectory.json")]
         for f in res["futures"]:
             fdir = gdir / "futures" / f"f{f['index']:02d}"
             _write_json(fdir / "layout.json", f["layout"])
             _write_json(fdir / "params.json", f["params"])
             _write_json(fdir / "trajectory.json", f["traj"])
             _write_json(fdir / "applied.json", f["applied"])
-            variants.append(
-                (f["index"], f["layout"], f["traj"], f["check"], f["params"], f"groups/{gid}/futures/f{f['index']:02d}/trajectory.json")
-            )
+            cand = {"id": f"f{f['index']:02d}", "kind": "valid", "branch_frame": 0, "applied": f["applied"]}
+            variants.append((cand, f["layout"], f["traj"], f["check"], f["params"], f"groups/{gid}/futures/{cand['id']}/trajectory.json"))
+        for c in res["candidates"]:
+            if c.kind == "reference":
+                variants[0][0]["validator"] = c.applied.get("validator")
+                continue
+            cdir = gdir / "candidates" / c.cid
+            meta = {
+                "id": c.cid,
+                "kind": c.kind,
+                "label": c.label,
+                "prefix_frames": cfg.benchmark.prefix_frames,
+                "branch_frame": cfg.benchmark.prefix_frames,
+                "violation": c.violation,
+                "divergence_m": round(c.divergence, 5),
+                "applied": {k: v for k, v in c.applied.items() if k != "validator"},
+                "validator": c.applied.get("validator"),
+            }
+            _write_json(cdir / "layout.json", c.layout)
+            _write_json(cdir / "params.json", c.params)
+            _write_json(cdir / "trajectory.json", c.traj)
+            _write_json(cdir / "candidate.json", meta)
+            variants.append((meta, c.layout, c.traj, res["check"], c.params, f"groups/{gid}/candidates/{c.cid}/trajectory.json"))
+        if res["bench_stats"]:
+            _write_json(gdir / "benchmark_stats.json", res["bench_stats"])
         for a, v in sorted(wanted[(e, s, o)]):
             cam = res["cameras"][v]
-            for fidx, lay, traj, chk, par, trel in variants:
-                job = build_job(cfg, gid, lay, traj, trel, cam, e, s, o, a, v, fidx, chk, par)
+            for cand, lay, traj, chk, par, trel in variants:
+                job = build_job(cfg, gid, lay, traj, trel, cam, e, s, o, a, v, cand, chk, par, prov)
                 _write_json(out / "jobs" / f"{job['job_id']}.json", job)
                 manifest.append({"job_id": job["job_id"], "output_rel": job["output_rel"], **job["factors"]})
-        summary.append(asdict(GroupResult(gid, e, s, o, True, "", res["attempt"] + 1, len(res["futures"]))))
+        g = asdict(GroupResult(gid, e, s, o, True, "", res["attempt"] + 1, len(variants) - 1))
+        g["benchmark"] = res["bench_stats"]
+        summary.append(g)
 
     with open(out / "manifest.jsonl", "w") as fh:
         for m in manifest:
@@ -538,6 +615,7 @@ def plan_experiment(cfg: ExperimentConfig, out_dir: str | Path, workers: int = 1
         "seed": cfg.seed,
         "config_path": str(cfg.source_path.resolve()) if cfg.source_path else None,
         "config": cfg.raw,
+        "provenance": prov,
         "num_jobs": len(manifest),
         "groups": summary,
     }

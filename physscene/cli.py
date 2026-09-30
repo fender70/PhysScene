@@ -5,6 +5,7 @@
     physscene export   PLAN_DIR -o DATASET_DIR     # CRONOS-compatible dataset
     physscene validate DATASET_DIR
     physscene run      CONFIG -o OUT --renderer preview   # all of the above
+    physscene gate     PLAN_DIR DATASET_DIR        # decision-gate report
     physscene inspect  PLAN_DIR                    # summary + top-down plots
 """
 from __future__ import annotations
@@ -116,6 +117,18 @@ def cmd_validate(a) -> int:
     return 0 if rep.ok else 1
 
 
+def cmd_gate(a) -> int:
+    from .gate import run_gate
+
+    r = run_gate(a.plan, a.dataset, a.output, a.sample_groups)
+    for name, g in r["gates"].items():
+        print(f"{'PASS' if g['pass'] else 'FAIL'}  {name}")
+    for name, ok in r["validation_stages"].items():
+        print(f"{'PASS' if ok else 'FAIL'}  stage {name}")
+    print("overall:", "PASS" if r["all_pass"] else "FAIL")
+    return 0 if r["all_pass"] else 1
+
+
 def cmd_inspect(a) -> int:
     from .inspect import inspect_plan
 
@@ -178,6 +191,13 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("validate", help="check a dataset for completeness / CRONOS compatibility")
     sp.add_argument("dataset")
     sp.set_defaults(fn=cmd_validate)
+
+    sp = sub.add_parser("gate", help="decision-gate report (reproducibility, control, validation, provenance)")
+    sp.add_argument("plan")
+    sp.add_argument("dataset")
+    sp.add_argument("-o", "--output", help="report directory (default: DATASET/benchmark)")
+    sp.add_argument("--sample-groups", type=int, default=4)
+    sp.set_defaults(fn=cmd_gate)
 
     sp = sub.add_parser("inspect", help="summarise a plan and draw top-down layout plots")
     sp.add_argument("plan")

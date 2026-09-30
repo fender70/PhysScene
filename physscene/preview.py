@@ -121,5 +121,5 @@ def render_job(job: dict[str, Any], plan_dir: Path, out_dir: Path, catalog: Cata
         if "mask" in passes:
             Image.fromarray(stencil_to_bits_rgb(stencil)).save(out_dir / "labels" / f"{f:04d}.png")
         if "depth" in passes:
-            np.save(out_dir / "depth" / f"{f:04d}.npy", depth)
+            np.savez_compressed(out_dir / "depth" / f"{f:04d}.npz", depth=depth.astype(np.float16))
     (out_dir / "DONE").write_text(job_fingerprint(job) + " preview\n")

@@ -38,6 +38,8 @@ def scene_primitives(
             )
         )
     for b in layout.bodies:
+        if not traj.is_visible(b.name, frame):
+            continue
         a = catalog.get(b.asset)
         prims.append(
             Primitive(

@@ -31,7 +31,7 @@ from .geometry import quat_to_matrix
 from .spec import job_fingerprint
 
 log = logging.getLogger("physscene.export")
-IMG_EXT = (".png", ".jpg", ".jpeg", ".exr", ".npy")
+IMG_EXT = (".png", ".jpg", ".jpeg", ".exr", ".npy", ".npz")
 
 
 def _frames(d: Path, prefer: str | None = None, avoid: str | None = "FinalImage") -> list[Path]:
@@ -59,6 +59,8 @@ def _frames(d: Path, prefer: str | None = None, avoid: str | None = "FinalImage"
 def _read_image(p: Path) -> np.ndarray:
     if p.suffix == ".npy":
         return np.load(p)
+    if p.suffix == ".npz":
+        return np.load(p)["depth"].astype(np.float32)
     if p.suffix.lower() == ".exr":
         return _read_exr(p)
     return np.asarray(Image.open(p))
@@ -202,7 +204,16 @@ def export_job(job: dict[str, Any], plan_dir: Path, render_dir: Path, dataset_di
             Image.fromarray(mm).save(dst / "depth" / f"frame_{t:04d}.png")
 
     meta = dict(job["metadata"])
+    done = (render_dir / "DONE").read_text().split() if (render_dir / "DONE").exists() else []
     meta.update({"job_id": job["job_id"], "num_frames": len(rgb_files), "resolution": [w, h], "mask_bodies": names})
+    meta.setdefault("provenance", {})
+    meta["provenance"] = {
+        **meta["provenance"],
+        "job_fingerprint": job_fingerprint(job),
+        "renderer": done[1] if len(done) > 1 else "unknown",
+        "render_settings": job["render"],
+        "trajectory_file": job["trajectory"],
+    }
     (dst / "metadata.json").write_text(json.dumps(meta, indent=1))
     (dst / "camera.json").write_text(json.dumps(camera_json(job, w, h), indent=1))
     tdir = (plan_dir / job["trajectory"]).parent
@@ -211,6 +222,9 @@ def export_job(job: dict[str, Any], plan_dir: Path, render_dir: Path, dataset_di
         "params": json.loads((tdir / "params.json").read_text()),
         "trajectory": json.loads((plan_dir / job["trajectory"]).read_text()),
         "unreal_keys": {b["name"]: b["ue_keys"] for b in job["bodies"]},
+        "shapes": {b["name"]: b["shape"] for b in job["bodies"]},
+        "world": job.get("world"),
+        "candidate": job["metadata"].get("candidate"),
     }
     (dst / "states.json").write_text(json.dumps(states))
     return dst
@@ -223,7 +237,7 @@ def cronos_prompt_config(dataset_dir: Path) -> dict[str, Any]:
     objects: dict[str, str] = {}
     apps: dict[str, list[str]] = defaultdict(list)
     for mp in dataset_dir.rglob("metadata.json"):
-        if "alternatives" in mp.parts:
+        if "alternatives" in mp.parts or "violations" in mp.parts:
             continue
         m = json.loads(mp.read_text())
         surf[m["event"]][m["scene"]] = m.get("surface_name", "")
@@ -246,6 +260,7 @@ def export_plan(plan_dir: str | Path, dataset_dir: str | Path, render_root: str 
     plan_dir = Path(plan_dir)
     dataset_dir = Path(dataset_dir)
     render_root = Path(render_root) if render_root else plan_dir / "renders"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
     out = []
     missing = []
     for jp in sorted((plan_dir / "jobs").glob("*.json")):
@@ -260,4 +275,78 @@ def export_plan(plan_dir: str | Path, dataset_dir: str | Path, render_root: str 
         log.warning("%d jobs have no up-to-date renders (e.g. %s); skipped", len(missing), missing[0])
     (dataset_dir / "cronos_config.json").write_text(json.dumps(cronos_prompt_config(dataset_dir), indent=1))
     shutil.copyfile(plan_dir / "plan.json", dataset_dir / "plan.json")
+    write_benchmark_index(dataset_dir)
     return out
+
+
+def write_benchmark_index(dataset_dir: Path) -> dict[str, Any] | None:
+    """``benchmark/pairs.jsonl`` (reference -> candidate, label from construction)
+    and ``benchmark/frozen_manifest.json`` (SHA-256 of every video and
+    metadata file, plus one dataset hash). Scoring refers to a frozen manifest,
+    so no metric result can change its own ground truth."""
+    from .provenance import file_sha256
+
+    samples = {}
+    for mp in sorted(dataset_dir.rglob("metadata.json")):
+        if mp.parent == dataset_dir:
+            continue
+        m = json.loads(mp.read_text())
+        samples[mp.parent.relative_to(dataset_dir).as_posix()] = m
+    if not any("candidate" in m for m in samples.values()):
+        return None
+    refs = {}
+    for rel, m in samples.items():
+        if m.get("candidate", {}).get("kind") == "reference":
+            refs[(m["group_id"], m["appearance"], m["view"])] = rel
+    bdir = dataset_dir / "benchmark"
+    bdir.mkdir(exist_ok=True)
+    pairs = []
+    for rel, m in samples.items():
+        c = m.get("candidate") or {}
+        if c.get("kind") not in ("valid", "invalid"):
+            continue
+        ref = refs.get((m["group_id"], m["appearance"], m["view"]))
+        if ref is None:
+            continue
+        v = c.get("violation") or {}
+        pairs.append(
+            {
+                "reference": f"{ref}/movies/complete.mp4",
+                "candidate": f"{rel}/movies/complete.mp4",
+                "label": c["kind"],
+                "candidate_id": c["id"],
+                "violation_type": v.get("type"),
+                "severity": v.get("severity"),
+                "prefix_frames": c.get("prefix_frames"),
+                "onset_frame": v.get("onset_frame", c.get("branch_frame")),
+                "divergence_m": c.get("divergence_m"),
+                "validator_confirms": (not c["validator"]["valid"]) if c.get("validator") and c["kind"] == "invalid"
+                else (c["validator"]["valid"] if c.get("validator") else None),
+                "event": m["event"],
+                "scene": m["scene"],
+                "object": m["object"],
+                "appearance": m["appearance"],
+                "view": m["view"],
+                "group_id": m["group_id"],
+            }
+        )
+    with open(bdir / "pairs.jsonl", "w") as fh:
+        for p in pairs:
+            fh.write(json.dumps(p) + "\n")
+    files = {}
+    for rel in samples:
+        for f in ("movies/complete.mp4", "metadata.json", "states.json"):
+            fp = dataset_dir / rel / f
+            if fp.exists():
+                files[f"{rel}/{f}"] = file_sha256(fp)
+    import hashlib
+
+    digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    manifest = {"dataset_sha256": digest, "num_samples": len(samples), "num_pairs": len(pairs), "files": files}
+    (bdir / "frozen_manifest.json").write_text(json.dumps(manifest, indent=1))
+    counts: dict[str, int] = defaultdict(int)
+    for p in pairs:
+        counts[p["label"] if p["label"] == "valid" else f"invalid:{p['violation_type']}"] += 1
+    summary = {"references": len(refs), "pairs": len(pairs), "by_type": dict(counts), "dataset_sha256": digest}
+    (bdir / "summary.json").write_text(json.dumps(summary, indent=1))
+    return summary

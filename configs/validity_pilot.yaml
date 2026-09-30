@@ -1,0 +1,64 @@
+# Physical-validity benchmark pilot.
+#
+# Each reference clip gets matched-prefix candidates:
+#   * valid:   the simulation branches at the prefix with resampled hidden physics;
+#   * invalid: controlled violations of physical law after the prefix.
+# Labels come from how each candidate was built, and each label is checked
+# again by the independent state validator (physscene/validator.py).
+#
+#   physscene run  configs/validity_pilot.yaml -o out/pilot --renderer preview --workers 8
+#   physscene gate out/pilot/plan out/pilot/dataset
+name: validity_pilot
+seed: 2026
+catalog: catalog_starter.yaml
+levels:
+  - levels/studio_table.yaml
+  - levels/studio_floor.yaml
+
+design:
+  events: [fall, collision, occlusion]
+  scenes: [studio_table, studio_floor]
+  objects: [Ball, Can, Block]
+  appearances: {Ball: [red, blue], Can: [silver, orange], Block: [yellow, teal]}
+  views: 2
+  max_layout_attempts: 150
+
+render:
+  fps: 24
+  num_frames: 72              # 3 s
+  resolution: [1280, 720]
+  passes: [rgb, mask, depth]
+
+physics: {backend: mujoco, timestep: 0.001}
+
+events:                       # key moment after the 1 s prefix
+  fall: {event_time_frac: [0.45, 0.65]}
+  collision: {event_time_frac: [0.42, 0.6], impact_speed: [0.35, 0.9]}
+  occlusion: {event_time_frac: [0.42, 0.6], pass_speed: [0.15, 0.4]}
+
+benchmark:
+  prefix_frames: 24           # frames 0..24 are identical in every candidate
+  require_validator: true
+  valid:
+    count: 2
+    min_divergence: 0.02      # m; alternatives must be visibly different
+    max_attempts: 60
+    perturb:
+      friction: {rel: 0.4}
+      restitution: {rel: 0.4}
+      rolling_friction: {rel: 0.6}
+      mass: {rel: 0.4}
+      surface.friction: {rel: 0.4}
+      collider.mass: {rel: 0.6}
+      collider.friction: {rel: 0.5}
+  invalid:
+    min_divergence: 0.03
+    types:
+      teleport: [low, high]
+      speed_jump: [low, high]
+      gravity: [mid, high]    # fall only (see applicable_events)
+      freeze: [mid]
+      time_reversal: [mid]
+      vanish: [low, high]
+      penetration: [mid]
+    applicable_events: {gravity: [fall]}
