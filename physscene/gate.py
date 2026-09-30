@@ -102,7 +102,7 @@ class Gate:
 
     # ------------------------------------------------------------------ G2
     def g2_control(self) -> dict[str, Any]:
-        from .benchmark import validate  # noqa: F401  (ensures module import works)
+        from .benchmark import validate
         from .physics import get_backend
         from .violations import branch, divergence
 
@@ -111,6 +111,7 @@ class Gate:
         knobs = [("object", "friction"), ("object", "restitution"), ("object", "mass"), ("object", "rolling_friction"),
                  ("surface", "friction")]
         table = defaultdict(list)
+        unstable = defaultdict(int)
         recorded_ok = True
         for g in self.sample:
             gdir = self.plan_dir / "groups" / g["group_id"]
@@ -135,12 +136,19 @@ class Gate:
                         recorded_ok &= f'mass="{d[name]:.6g}"' in xml
                     t = branch(ref, P, lay, p2, sim)
                     table[f"{target}.{name}"].append(divergence(ref, t))
+                    if not validate(lay, p2, t, level, self.cfg.catalog, self.cfg.benchmark.validator_tol).valid:
+                        unstable[f"{target}.{name}"] += 1
         rows = [{"parameter": k, "groups_x_settings": len(v), "responding": int(sum(x > 1e-4 for x in v)),
-                 "median_divergence_m": round(float(np.median(v)), 4), "max_divergence_m": round(float(np.max(v)), 4)}
+                 "median_divergence_m": round(float(np.median(v)), 4), "max_divergence_m": round(float(np.max(v)), 4),
+                 "flagged_by_validator": unstable[k]}
                 for k, v in table.items()]
         ok = recorded_ok and all(r["responding"] > 0 for r in rows)
         return {"pass": ok, "method": f"Set each hidden parameter to 0.5x and 2x from the matched prefix (frame {P}) "
-                "and measured the change in the object trajectory. Also checked that the value reaches the simulator model.",
+                "and measured the change in the object trajectory. Also checked that the value reaches the simulator model. "
+                "Every swept trajectory is also run through the independent validator. A flagged result means the "
+                "simulator became unphysical at that setting (e.g. a numerical instability); such trajectories are never "
+                "admitted to the dataset.",
+                "sweep_results_flagged_by_validator": int(sum(unstable.values())),
                 "rows": rows}
 
     # ------------------------------------------------------------------ G3
