@@ -60,17 +60,24 @@ def _bind(sequence, actor, use_spawnables: bool):
     return sequence.add_possessable(actor), actor
 
 
-def _transform_keys(binding, n_frames: int, locations, rotations, scale) -> None:
+def _transform_keys(binding, n_frames: int, locations, rotations, scale, visible=None) -> None:
+    """Bake per-frame keys. Around frames where ``visible`` changes, keys are
+    stepped (constant interpolation), so sub-frame samples never sweep a
+    hidden body between its real position and its parking spot."""
     track = binding.add_track(unreal.MovieScene3DTransformTrack)
     section = track.add_section()
     set_section_range(section, 0, n_frames)
     ch = double_channels(section)
     if len(ch) < 9:
         raise RuntimeError(f"unexpected transform channel count {len(ch)}")
+    n = len(locations)
     for f, (loc, rot) in enumerate(zip(locations, rotations)):
+        step = bool(visible) and (
+            (f + 1 < n and visible[f] != visible[f + 1]) or not visible[f]
+        )
         for i in range(3):
-            add_key(ch[i], f, loc[i])
-            add_key(ch[3 + i], f, rot[i])
+            add_key(ch[i], f, loc[i], constant=step)
+            add_key(ch[3 + i], f, rot[i], constant=step)
     for i in range(3):
         add_key(ch[6 + i], 0, scale[i])
 
@@ -146,7 +153,7 @@ def build_sequence(job: dict, use_spawnables: bool = True):
             keys["rotation"][0],
         )
         b, keep = _bind(seq, a, use_spawnables)
-        _transform_keys(b, n, keys["location"], keys["rotation"], body["scale"])
+        _transform_keys(b, n, keys["location"], keys["rotation"], body["scale"], keys.get("visible"))
         if keep:
             leftovers.append(keep)
 

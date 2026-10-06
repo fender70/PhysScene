@@ -60,3 +60,29 @@ def test_benchmark_end_to_end_gate(tmp_path):
     assert main(["gate", str(out / "plan"), str(ds), "--sample-groups", "1"]) == 0
     report = json.loads((ds / "benchmark" / "gate_report.json").read_text())
     assert report["all_pass"]
+
+
+def test_visibly_different_ignores_changes_the_camera_cannot_see():
+    from physscene.benchmark import visibly_different
+
+    n = 10
+    ref = {"vis": np.zeros(n), "uv": np.zeros((n, 2)), "inside": np.ones(n, bool)}
+    # object hidden behind an occluder in both -> a vanish there is invisible
+    assert not visibly_different(ref, {"vis": np.zeros(n), "uv": np.zeros((n, 2))}, px=6)
+    seen = {"vis": np.ones(n), "uv": np.zeros((n, 2))}
+    gone = {"vis": np.r_[np.ones(5), np.zeros(5)], "uv": np.zeros((n, 2))}
+    assert visibly_different(seen, gone, px=6)
+    shifted = {"vis": np.ones(n), "uv": np.tile([10.0, 0.0], (n, 1))}
+    assert visibly_different(seen, shifted, px=6)
+    assert not visibly_different(seen, {"vis": np.ones(n), "uv": np.tile([2.0, 0.0], (n, 1))}, px=6)
+
+
+def test_teleport_respects_offset_constraint():
+    from physscene.spec import Trajectory
+    from physscene.violations import teleport
+
+    T = 10
+    tr = Trajectory(fps=24, names=["object"], positions={"object": [[0.0, 0.0, 1.0]] * T},
+                    quats={"object": [[1.0, 0, 0, 0]] * T})
+    out = teleport(tr, 2, 0.3, np.random.default_rng(0), offset_ok=lambda off: off[0] > 0.25)
+    assert out.pos("object")[-1][0] > 0.25 and out.pos("object")[0][0] == 0.0

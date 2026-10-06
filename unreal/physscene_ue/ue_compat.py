@@ -56,8 +56,11 @@ def set_section_range(section, start: int, end: int) -> None:
         section.set_end_frame(end)
 
 
-def add_key(channel, frame: int, value: float, linear: bool = True) -> None:
-    interp = unreal.MovieSceneKeyInterpolation.LINEAR if linear else unreal.MovieSceneKeyInterpolation.AUTO
+def add_key(channel, frame: int, value: float, linear: bool = True, constant: bool = False) -> None:
+    if constant:
+        interp = unreal.MovieSceneKeyInterpolation.CONSTANT
+    else:
+        interp = unreal.MovieSceneKeyInterpolation.LINEAR if linear else unreal.MovieSceneKeyInterpolation.AUTO
     channel.add_key(unreal.FrameNumber(frame), float(value), 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE, interp)
 
 

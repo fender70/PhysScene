@@ -33,7 +33,9 @@ FAR_AWAY = [0.0, 0.0, -1000.0]  # where "vanished" bodies are parked (never rend
 SEVERITIES: dict[str, dict[str, float]] = {
     "teleport": {"low": 0.05, "mid": 0.15, "high": 0.3},  # jump distance (m)
     "speed_jump": {"low": 1.5, "mid": 2.5, "high": 4.0},  # velocity multiplier at P
-    "gravity": {"low": 0.5, "mid": 0.1, "high": -0.5},  # gravity multiplier after P
+    # gravity multiplier after P. "high" is weightlessness, not reversed gravity:
+    # with reversed gravity the object leaves the frame and most of the clip is empty.
+    "gravity": {"low": 0.5, "mid": 0.2, "high": 0.0},
     "freeze": {"mid": 1.0},  # object stops dead
     "time_reversal": {"mid": 1.0},  # motion plays backwards after P
     "vanish": {"low": 8.0, "mid": 16.0, "high": 1e9},  # frames invisible (high = never returns)
@@ -88,10 +90,22 @@ def _copy(t: Trajectory) -> Trajectory:
     return Trajectory.from_dict(copy.deepcopy(t.__dict__))
 
 
-def teleport(ref: Trajectory, P: int, dist: float, rng: np.random.Generator, body="object", delay=3) -> Trajectory:
+def teleport(
+    ref: Trajectory, P: int, dist: float, rng: np.random.Generator, body="object", delay=3, offset_ok=None
+) -> Trajectory:
+    """Sideways jump of ``dist`` metres. ``offset_ok(offset)`` can reject jumps
+    that would add a second violation, e.g. leaving the support and hovering."""
     t = _copy(ref)
-    ang = rng.uniform(0, 2 * math.pi)
-    off = np.array([math.cos(ang), math.sin(ang), 0.0]) * dist
+    ang0 = rng.uniform(0, 2 * math.pi)
+    off = None
+    for k in range(16):
+        ang = ang0 + k * 2 * math.pi / 16
+        cand = np.array([math.cos(ang), math.sin(ang), 0.0]) * dist
+        if offset_ok is None or offset_ok(cand):
+            off = cand
+            break
+    if off is None:
+        raise ValueError("no teleport direction keeps the object on its support")
     for f in range(min(P + delay, t.num_frames), t.num_frames):
         t.positions[body][f] = (np.asarray(t.positions[body][f]) + off).tolist()
     return t
@@ -114,10 +128,10 @@ def time_reversal(ref: Trajectory, P: int, body="object") -> Trajectory:
     return t
 
 
-def vanish(ref: Trajectory, P: int, frames: float, body="object", delay=2) -> Trajectory:
+def vanish(ref: Trajectory, P: int, frames: float, body="object", delay=2, start: int | None = None) -> Trajectory:
     t = _copy(ref)
     vis = [True] * t.num_frames
-    start = min(P + delay, t.num_frames - 1)
+    start = min(P + delay, t.num_frames - 1) if start is None else start
     end = t.num_frames if frames >= t.num_frames else min(t.num_frames, start + int(frames))
     for f in range(start, end):
         vis[f] = False
@@ -138,16 +152,18 @@ def make_violation(
     params: PhysicalParams,
     sim: SimFn,
     rng: np.random.Generator,
+    vanish_start: int | None = None,
+    offset_ok=None,
 ) -> Trajectory:
     value = SEVERITIES[vtype][severity]
     if vtype == "teleport":
-        return teleport(ref, P, value, rng)
+        return teleport(ref, P, value, rng, offset_ok=offset_ok)
     if vtype == "freeze":
         return freeze(ref, P)
     if vtype == "time_reversal":
         return time_reversal(ref, P)
     if vtype == "vanish":
-        return vanish(ref, P, value)
+        return vanish(ref, P, value, start=vanish_start)
     if vtype == "speed_jump":
         def edit(state):
             s = state["object"]
@@ -166,5 +182,5 @@ def make_violation(
     raise ValueError(f"unknown violation type {vtype!r}")
 
 
-def violation_meta(vtype: str, severity: str, P: int) -> dict[str, Any]:
-    return {"type": vtype, "severity": severity, "value": SEVERITIES[vtype][severity], "onset_frame": P}
+def violation_meta(vtype: str, severity: str, P: int, onset: int | None = None) -> dict[str, Any]:
+    return {"type": vtype, "severity": severity, "value": SEVERITIES[vtype][severity], "onset_frame": P if onset is None else onset}

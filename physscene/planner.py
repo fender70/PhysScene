@@ -153,7 +153,10 @@ def actor_keys(asset: Asset, traj: Trajectory, name: str) -> dict[str, list[list
         locs.append([round(v, 4) for v in to_ue_location(pa)])
         rots.append(quat_to_ue_rotator(qa))
     rots = [[round(v, 4) for v in r] for r in unwrap_degrees(rots)]
-    return {"location": locs, "rotation": rots}
+    out = {"location": locs, "rotation": rots}
+    if name in traj.visible:
+        out["visible"] = [bool(v) for v in traj.visible[name]]
+    return out
 
 
 def camera_ue(cam: CameraSpec) -> dict[str, Any]:
@@ -313,7 +316,7 @@ def plan_group(cfg: ExperimentConfig, event: str, scene: str, obj_key: str) -> d
         if cfg.benchmark.enabled:
             from .benchmark import make_candidates
 
-            candidates, bench_stats = make_candidates(cfg, level, layout, params, traj, (event, scene, obj_key, attempt))
+            candidates, bench_stats = make_candidates(cfg, level, layout, params, traj, (event, scene, obj_key, attempt), cams)
         futures = []
         fs = cfg.futures
         k = 0

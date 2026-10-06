@@ -179,6 +179,20 @@ class Gate:
             for k, n in (g.get("benchmark") or {}).items():
                 if ":" in k or k.endswith("flagged") or k.startswith("valid_"):
                     prefilter[k] += n
+        # Disagreement measured before require_validator filtering. This is the
+        # validator's real error rate on generated candidates; the confusion matrix
+        # above is computed after filtering, so it is 100% agreement by construction.
+        flagged_valid = sum(n for k, n in prefilter.items() if k == "valid_flagged_by_validator")
+        missed_invalid = sum(n for k, n in prefilter.items() if k.startswith("invalid_missed_by_validator"))
+        confirmed = sum(n for k, n in prefilter.items() if k.startswith("invalid_confirmed"))
+        generated_valid = sum((g.get("benchmark") or {}).get("valid", 0) for g in self.groups) + flagged_valid
+        pre = {
+            "valid_generated": generated_valid,
+            "valid_flagged_by_validator": flagged_valid,
+            "invalid_generated": confirmed + missed_invalid,
+            "invalid_missed_by_validator": missed_invalid,
+            "note": "Counts over visible, camera-distinguishable candidates before the require_validator filter.",
+        }
         fp = conf[("valid", "invalid")]
         fn = conf[("invalid", "valid")]
         tp = conf[("invalid", "invalid")]
@@ -192,7 +206,48 @@ class Gate:
             "confusion": {"valid_as_valid": tn, "valid_as_invalid": fp, "invalid_as_invalid": tp, "invalid_as_valid": fn},
             "by_violation_type": {k: dict(v) for k, v in by_type.items()},
             "state_frames_match_video": frames_ok,
+            "validator_disagreement_before_filtering": pre,
             "generation_prefilter": dict(prefilter),
+        }
+
+    # ------------------------------------------------------------------ Q
+    def q_item_quality(self) -> dict[str, Any]:
+        """Benchmark items must be usable: every candidate differs from its
+        reference in rendered pixels after the prefix, and the object stays in view."""
+        by_key = {(m["group_id"], m["appearance"], m["view"], (m.get("candidate") or {}).get("id")): (d, m)
+                  for d, m in self.samples.items()}
+        not_distinct, out_of_view, checked = [], [], 0
+        for (gid, app, view, cid), (d, m) in by_key.items():
+            c = m.get("candidate") or {}
+            if c.get("kind") not in ("valid", "invalid") or (gid, app, view, "ref") not in by_key:
+                continue
+            rd, _ = by_key[(gid, app, view, "ref")]
+            P = c.get("prefix_frames") or 0
+            T = m["num_frames"]
+            changed = 0
+            for t in range(P + 1, T, 2):
+                a = np.asarray(Image.open(d / "rgb" / f"frame_{t:04d}.png"), int)
+                b = np.asarray(Image.open(rd / "rgb" / f"frame_{t:04d}.png"), int)
+                changed += int((np.abs(a - b).max(axis=-1) > 30).sum() >= 6)
+            checked += 1
+            if changed < 2:
+                not_distinct.append(str(d.relative_to(self.dataset)))
+            vtype = (c.get("violation") or {}).get("type")
+            if vtype != "vanish" and m["event"] != "occlusion" and (d / "masks.npz").exists():
+                mk = np.load(d / "masks.npz")["masks"][P + 1 :, ..., 0]
+                frac = float((mk.reshape(mk.shape[0], -1).sum(1) > 0).mean())
+                if frac < 0.5:
+                    out_of_view.append((str(d.relative_to(self.dataset)), round(frac, 2)))
+        return {
+            "pass": not not_distinct and not out_of_view,
+            "method": "For every candidate and view, compared rendered frames after the prefix with the reference "
+            "(a candidate must change more than a few pixels in at least two sampled frames). Also checked that "
+            "the object is in view for at least half of the frames after the prefix (vanish and occlusion excepted).",
+            "candidates_checked": checked,
+            "not_visibly_different": not_distinct[:20],
+            "num_not_visibly_different": len(not_distinct),
+            "object_mostly_out_of_view": out_of_view[:20],
+            "num_object_mostly_out_of_view": len(out_of_view),
         }
 
     # ------------------------------------------------------------------ G4
@@ -343,6 +398,7 @@ class Gate:
             "G4 reproducible counterfactual visual transformations": self.g4_counterfactual_visuals(),
             "G5 stable batch rendering without manual adjustment": self.g5_batch(),
             "G6 complete provenance": self.g6_provenance(),
+            "Q benchmark item quality": self.q_item_quality(),
         }
         summary_path = self.dataset / "benchmark" / "summary.json"
         stages = {

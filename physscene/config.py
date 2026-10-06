@@ -95,6 +95,11 @@ class BenchmarkSettings:
     # e.g. {gravity: [fall]}. On a table top, weaker gravity looks like lower friction.
     applicable_events: dict[str, list[str]] = field(default_factory=lambda: {"gravity": ["fall"]})
     validator_tol: dict[str, float] = field(default_factory=dict)
+    # Camera-aware filters: a candidate must be visibly different from its
+    # reference in every view (min_pixel_shift is in pixels at 1280 px width), and keep
+    # the object in frame for this fraction of the frames after the prefix.
+    min_pixel_shift: float = 6.0
+    min_in_frame_frac: float = 0.5
 
     @staticmethod
     def from_dict(d: dict | None) -> "BenchmarkSettings":
@@ -114,6 +119,8 @@ class BenchmarkSettings:
             require_validator=bool(d.get("require_validator", True)),
             applicable_events=dict(inv.get("applicable_events", {"gravity": ["fall"]})),
             validator_tol=dict(d.get("validator_tol", {}) or {}),
+            min_pixel_shift=float(d.get("min_pixel_shift", 6.0)),
+            min_in_frame_frac=float(d.get("min_in_frame_frac", 0.5)),
         )
 
 

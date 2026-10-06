@@ -21,16 +21,26 @@ ever defines ground truth.
 | kind | construction | severities |
 |---|---|---|
 | `valid` (`alternatives/fNN`) | re-simulate from the exact state at frame P with resampled friction, restitution, rolling friction, mass, surface friction and collider mass/friction; no state edits | the perturbation ranges in the config |
-| `teleport` | object position jumps sideways, then continues | low / mid / high = 5 / 15 / 30 cm |
+| `teleport` | object position jumps sideways, then continues; the jump never moves it off its support (so it cannot also hover) | low / mid / high = 5 / 15 / 30 cm |
 | `speed_jump` | velocity multiplied at P (dynamic re-simulation) | ×1.5 / ×2.5 / ×4 |
-| `gravity` | re-simulate with wrong gravity (fall events only) | ×0.5 / ×0.1 / ×−0.5 |
+| `gravity` | re-simulate with wrong gravity (fall events only) | ×0.5 / ×0.2 / ×0 (weightless) |
 | `freeze` | object stops dead | n/a |
 | `time_reversal` | motion plays backwards after P | n/a |
 | `vanish` | object disappears (low/mid: reappears after 8 or 16 frames; high: never returns) | low / mid / high |
 | `penetration` | contact with the next support or collider disabled (falls through the table, passes through the cup) | n/a |
 
-A candidate is kept only if it is **visibly different** from the reference
-(`min_divergence`, max position deviation of any body). With
+A candidate is kept only if it is **visibly different** from the reference:
+
+* in 3D (`min_divergence`, max position deviation of any body), and
+* **in every camera view**: at least 3 frames after the prefix where the object
+  appears or disappears relative to the reference, or is `min_pixel_shift`
+  (6 px at 1280 width) away from its reference position. A `vanish` while the
+  object is already behind an occluder is therefore rejected, and vanish onsets are
+  scheduled when the object is visible in every view;
+* with the object **in frame** for at least `min_in_frame_frac` (50%) of the
+  frames after the prefix (except `vanish` and occlusion events).
+
+With
 `require_validator: true` (the default) it must also be **independently
 confirmed**: violations must be flagged and valid alternatives must pass.
 Rejections are counted in `plan.json` and in the gate report.
@@ -51,6 +61,15 @@ and contact flags. It shares no code with the generator. It checks:
 * **energy**: total mechanical energy never rises (impact intervals excluded
   from the baseline);
 * **non-penetration**: no sinking into supports or overlapping bodies.
+
+**Held-out accuracy.** The tolerances were tuned on the starter shapes. On
+held-out assets and a held-out level (the CRONOS-style catalog in the kitchen
+template: tennis ball, soccer ball, can, bottle and toy truck; seed 4242), with
+filtering disabled, the validator accepted **88/90** valid futures and
+**15/15** references, and flagged **189/191** violations. The two misses were
+`freeze` on slow objects, where stopping is hard to tell apart from ordinary
+deceleration. Reproduce with `require_validator: false` and the counts in
+`plan.json`.
 
 References must pass the validator too. On our assets this caught a MuJoCo
 artefact, a cylinder gaining energy while rolling over a box edge; such layouts
@@ -83,6 +102,11 @@ physscene gate PLAN_DIR DATASET_DIR
 | G4 reproducible counterfactual visual transformations | identical state across every view and appearance; bit-identical state and pixels over the matched prefix; masks agree with projected state; a job re-renders bit-identically |
 | G5 stable batch rendering without manual adjustment | every job rendered with a matching content fingerprint and exported; all groups planned; config unchanged since planning |
 | G6 complete provenance | every sample carries factors, candidate, physics, render settings, code commit, config hash and job fingerprint; frozen manifest hashes verified |
+| Q benchmark item quality | every candidate differs from its reference in rendered pixels after the prefix, in every view; the object stays in view for at least half of the frames after the prefix |
+
+G3 also reports the validator's disagreement **before** filtering. The
+confusion matrix over the exported dataset is 100% by construction when
+`require_validator` is on, so the pre-filter counts are the real error rate.
 
 It also reports the validation-before-scale stages: physics-only checks →
 one-render smoke test → matched-prefix checks → full rendering → independent
