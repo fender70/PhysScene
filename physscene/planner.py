@@ -589,6 +589,7 @@ def plan_experiment(cfg: ExperimentConfig, out_dir: str | Path, workers: int = 1
                 "prefix_frames": cfg.benchmark.prefix_frames,
                 "branch_frame": cfg.benchmark.prefix_frames,
                 "violation": c.violation,
+                "base": c.base,
                 "divergence_m": round(c.divergence, 5),
                 "applied": {k: v for k, v in c.applied.items() if k != "validator"},
                 "validator": c.applied.get("validator"),

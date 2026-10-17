@@ -59,8 +59,10 @@ restitution, mass, surface friction, sub-perceptual push noise).</em></p>
   per-frame poses, Unreal keys and camera intrinsics and extrinsics.
 * **Physical-validity benchmarks.** Every reference clip can get
   matched-prefix candidates: valid alternative futures (resampled hidden physics)
-  and controlled violations (teleport, speed jump, wrong gravity, freeze, time
-  reversal, vanishing, penetration) at graded severities. Each label is
+  and controlled violations (teleport, speed jump, smooth sideways drift, wrong
+  gravity, freeze, time reversal, vanishing, penetration) at graded severities.
+  Violations can be built from held-out alternatives, so each one is matched to
+  a valid base that is not itself a reference. Each label is
   re-derived by an **independent state validator**, and `physscene gate`
   writes a decision-gate report covering reproducibility, parameter control,
   independent validation, counterfactual visuals, batch stability and provenance.
@@ -97,6 +99,10 @@ A physical-validity pilot (references, valid alternatives and violations, plus a
 physscene run  configs/validity_pilot.yaml -o out/pilot --renderer preview --workers 8
 physscene gate out/pilot/plan out/pilot/dataset     # -> out/pilot/dataset/benchmark/GATE_REPORT.md
 ```
+
+[`configs/spectra_exp_a.yaml`](configs/spectra_exp_a.yaml) is the dataset for
+SPECTRA Experiment A: 18 base configurations, a reference bank plus held-out
+valid futures, and violations matched to the held-out futures.
 
 The starter experiment is 3 events × 2 scenes × 3 objects × 3 appearances ×
 3 views × (1 + 3 futures) = **648 clips**. It plans in about 15 s on a laptop.

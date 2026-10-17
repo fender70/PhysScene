@@ -1,0 +1,82 @@
+# SPECTRA Experiment A (construct validity): does reference-based similarity
+# separate physically valid futures from controlled violations?
+#
+# One base configuration = (event, level, object). Each base gets:
+#   * the reference plus 5 valid alternatives that branch at the prefix with
+#     resampled *hidden* physics. Only parameters that act after the prefix
+#     are resampled (proposal guardrail 4: the prefix must not reveal them);
+#   * violations built from the held-out alternatives f03-f05, each matched to
+#     its valid base and using that base's hidden parameters. The analysis uses
+#     {ref, f01, f02} as the reference bank (K = 1..3), so no violation is a
+#     small edit of a bank member;
+#   * occlusion is the single-future control: no alternatives, violations of
+#     the reference only.
+#
+#   physscene run  configs/spectra_exp_a.yaml -o out/exp_a --renderer preview --scale 0.5 --workers 4
+#   physscene gate out/exp_a/plan out/exp_a/dataset
+name: spectra_exp_a
+seed: 1017
+catalog: catalog_starter.yaml
+levels:
+  - levels/studio_table.yaml
+  - levels/studio_floor.yaml
+
+design:
+  events: [fall, collision, occlusion]
+  scenes: [studio_table, studio_floor]
+  objects: [Ball, Can, Block]
+  appearances: {Ball: [red], Can: [orange], Block: [teal]}   # appearance is Experiment D
+  views: 2
+  max_layout_attempts: 150
+
+render:
+  fps: 24
+  num_frames: 72              # 3 s
+  resolution: [1280, 720]     # rendered at --scale 0.5 -> 640 x 360
+  passes: [rgb, mask, depth]
+
+physics: {backend: mujoco, timestep: 0.001}
+
+events:                       # key moment after the 1 s prefix
+  fall: {event_time_frac: [0.45, 0.65]}
+  collision: {event_time_frac: [0.42, 0.6], impact_speed: [0.35, 0.9]}
+  occlusion: {event_time_frac: [0.42, 0.6], pass_speed: [0.15, 0.4]}
+
+benchmark:
+  prefix_frames: 24           # frames 0..24 are identical in every candidate
+  require_validator: true
+  valid:
+    count: 5                  # ref + f01..f05; bank = {ref, f01, f02}, held-out = {f03, f04, f05}
+    min_divergence: 0.02
+    max_attempts: 80
+  invalid:
+    bases: [f03, f04, f05]
+    min_divergence: 0.03
+    types:
+      teleport: [low, mid, high]
+      speed_jump: [low, mid, high]
+      drift: [low, mid, high]     # smooth unsupported sideways acceleration (pilots 2-3)
+      gravity: [low, mid, high]   # fall only
+      freeze: [mid]
+      time_reversal: [mid]
+      vanish: [mid, high]
+      penetration: [mid]
+    applicable_events: {gravity: [fall]}
+  per_event:
+    fall:
+      valid:
+        perturb:
+          restitution: {rel: 0.5}
+          floor.restitution: {rel: 0.5}
+          floor.friction: {rel: 0.5}
+    collision:
+      valid:
+        perturb:
+          mass: {rel: 0.5}
+          restitution: {rel: 0.5}
+          collider.mass: {rel: 0.6}
+          collider.friction: {rel: 0.5}
+          collider.restitution: {rel: 0.5}
+    occlusion:
+      valid: {count: 0}
+      invalid: {bases: [ref]}

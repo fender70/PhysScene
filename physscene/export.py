@@ -315,6 +315,7 @@ def write_benchmark_index(dataset_dir: Path) -> dict[str, Any] | None:
                 "candidate": f"{rel}/movies/complete.mp4",
                 "label": c["kind"],
                 "candidate_id": c["id"],
+                "base_id": c.get("base"),
                 "violation_type": v.get("type"),
                 "severity": v.get("severity"),
                 "prefix_frames": c.get("prefix_frames"),

@@ -17,6 +17,10 @@ Laws checked per dynamic body:
 * **angular momentum**: a sphere (or a cylinder lying on its side) rolling on
   one horizontal plane conserves angular momentum about the contact point, so
   it cannot stop, reverse or speed up on its own;
+* **straight path**: on one horizontal support with no other body nearby,
+  friction and rolling resistance act along the velocity, so nothing pushes the
+  body sideways: its horizontal path is straight (a cylinder only while its
+  axis stays horizontal; a tilted one rolls in a curve);
 * **energy**: total mechanical energy of all bodies never rises;
 * **non-penetration**: no body sinks into a support, and no two bodies overlap.
 
@@ -45,6 +49,11 @@ DEFAULT_TOL: dict[str, float] = {
     "penetration": 0.012,  # m
     "near": 0.006,  # contact proximity (m)
     "edge_band": 0.01,  # m; centre this close to a surface edge = edge contact
+    "lateral_abs": 0.015,  # m/s^2; sideways acceleration on a flat support
+    "lateral_min_frames": 12,  # shortest support run the straight-path law is fitted on
+    "lateral_min_speed": 0.05,  # m/s
+    "lateral_max_turn_deg": 2.0,  # runs where the body's heading turns more are not judged
+    "lateral_max_vz": 0.05,  # m/s; the straight-path law is only fitted once the body has settled
 }
 
 
@@ -314,6 +323,65 @@ def validate_states(
                         lim = tol["angmom_rel"] * max(np.linalg.norm(l0[0]), np.linalg.norm(l1[0])) + l0[1]
                         if dl > lim:
                             findings.append(Finding("angular_momentum", n, t, f"|dL| = {dl:.2e} > {lim:.2e} while rolling"))
+
+        # straight path: fit the sideways coordinate of each flat-support run with a
+        # parabola; twice its curvature is the unexplained sideways acceleration
+        def rolls_straight(k) -> bool:
+            if shape["type"] in ("cylinder", "capsule"):
+                return abs(_qmat(Q[n][k])[2, 2]) < 0.15
+            return True
+
+        run_ok = np.zeros(T, bool)
+        for t in range(T):
+            if not ok[t] or t in (0, T - 1):
+                continue
+            v = fd_vel(n, t)
+            run_ok[t] = (
+                support_state(n, t, v) == "support"
+                and not near_other(n, t)
+                and float(np.hypot(v[0], v[1])) > tol["lateral_min_speed"]
+                and abs(v[2]) < tol["lateral_max_vz"]  # settled, not still landing
+                and rolls_straight(t)
+            )
+        t = 0
+        while t < T:
+            if not run_ok[t]:
+                t += 1
+                continue
+            u = t
+            while u < T and run_ok[u]:
+                u += 1
+            # a body whose heading turns (a yawing can, a spinning block) may
+            # legitimately curve, so such runs are not judged; spheres have no heading
+            turned = 0.0
+            if shape["type"] != "sphere":
+                col = 2 if shape["type"] in ("cylinder", "capsule") else 0
+                yaw = [math.atan2(_qmat(Q[n][k])[1, col], _qmat(Q[n][k])[0, col]) for k in range(t, u)]
+                turned = float(np.max(np.abs(np.angle(np.exp(1j * (np.asarray(yaw) - yaw[0]))))))
+            if u - t < tol["lateral_min_frames"] or turned >= math.radians(tol["lateral_max_turn_deg"]):
+                t = u
+                continue
+            if shape["type"] in ("cylinder", "capsule"):
+                # A lying cylinder that slips along its axis (e.g. after landing
+                # askew) legitimately curves, but friction can only shrink that
+                # axial slip, never grow it.
+                axis = np.array([_qmat(Q[n][k])[:2, 2] for k in range(t, u)])
+                axis /= np.linalg.norm(axis, axis=1, keepdims=True)
+                v_ax = np.array([fd_vel(n, k)[:2] @ axis[k - t] for k in range(t, u)])
+                slope = np.polyfit(np.arange(u - t) * dt, np.abs(v_ax), 1)[0]
+                if slope > tol["lateral_abs"]:
+                    findings.append(Finding("straight_path", n, t, f"slip along the axis grows at {slope:.3f} m/s^2 "
+                                            f"over frames {t}-{u - 1} on a flat support"))
+            else:
+                xy = P[n][t:u, :2]
+                chord = xy[-1] - xy[0]
+                if np.linalg.norm(chord) > 1e-6:
+                    side = np.array([-chord[1], chord[0]]) / np.linalg.norm(chord)
+                    c2 = np.polyfit(np.arange(u - t) * dt, (xy - xy[0]) @ side, 2)[0]
+                    if abs(2 * c2) > tol["lateral_abs"]:
+                        findings.append(Finding("straight_path", n, t, f"sideways acceleration {2 * c2:+.3f} m/s^2 "
+                                                f"over frames {t}-{u - 1} on a flat support"))
+            t = u
 
         # penetration into supports / floor
         for t in range(T):

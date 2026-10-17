@@ -88,6 +88,11 @@ class BenchmarkSettings:
     valid_max_attempts: int = 20
     invalid: dict[str, list[str]] = field(default_factory=dict)
     invalid_min_divergence: float = 0.03
+    # Which valid trajectories the violations are built from: "ref" and/or
+    # valid alternative ids ("f03", ...). Building them from held-out
+    # alternatives keeps each violation matched to a valid base that is not
+    # itself used as a reference.
+    invalid_bases: list[str] = field(default_factory=lambda: ["ref"])
     # Keep only violations the independent validator confirms (and only valid
     # candidates it accepts), so every label has two independent sources.
     require_validator: bool = True
@@ -100,6 +105,22 @@ class BenchmarkSettings:
     # the object in frame for this fraction of the frames after the prefix.
     min_pixel_shift: float = 6.0
     min_in_frame_frac: float = 0.5
+    # Per-event overrides of the ``valid`` / ``invalid`` sections, e.g. so each
+    # event only resamples parameters that act after the prefix:
+    # {occlusion: {valid: {count: 0}, invalid: {bases: [ref]}}}. Each key given
+    # under valid/invalid replaces the shared value.
+    per_event: dict[str, dict] = field(default_factory=dict)
+    raw: dict = field(default_factory=dict, repr=False)
+
+    def for_event(self, event: str) -> "BenchmarkSettings":
+        """These settings with ``per_event.<event>`` applied."""
+        over = self.per_event.get(event)
+        if not over:
+            return self
+        merged = {k: v for k, v in self.raw.items() if k != "per_event"}
+        for k, v in over.items():
+            merged[k] = {**(merged.get(k) or {}), **v} if k in ("valid", "invalid") else v
+        return BenchmarkSettings.from_dict(merged)
 
     @staticmethod
     def from_dict(d: dict | None) -> "BenchmarkSettings":
@@ -116,11 +137,14 @@ class BenchmarkSettings:
             valid_max_attempts=int(v.get("max_attempts", 20)),
             invalid={k: list(x) if isinstance(x, (list, tuple)) else [x] for k, x in (inv.get("types") or {}).items()},
             invalid_min_divergence=float(inv.get("min_divergence", 0.03)),
+            invalid_bases=[str(b) for b in (inv.get("bases") or ["ref"])],
             require_validator=bool(d.get("require_validator", True)),
             applicable_events=dict(inv.get("applicable_events", {"gravity": ["fall"]})),
             validator_tol=dict(d.get("validator_tol", {}) or {}),
             min_pixel_shift=float(d.get("min_pixel_shift", 6.0)),
             min_in_frame_frac=float(d.get("min_in_frame_frac", 0.5)),
+            per_event=dict(d.get("per_event", {}) or {}),
+            raw=dict(d),
         )
 
 
