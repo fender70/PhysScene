@@ -40,6 +40,9 @@ SEVERITIES: dict[str, dict[str, float]] = {
     "time_reversal": {"mid": 1.0},  # motion plays backwards after P
     "vanish": {"low": 8.0, "mid": 16.0, "high": 1e9},  # frames invisible (high = never returns)
     "penetration": {"mid": 1.0},  # contact with the next support/collider disabled
+    # smooth unsupported sideways acceleration (m/s^2); continuous in position and
+    # velocity at onset. 0.06 / 0.18 / 0.54 m of drift after 2 s, as in the SPECTRA pilots
+    "drift": {"low": 0.03, "mid": 0.09, "high": 0.27},
 }
 
 
@@ -52,7 +55,8 @@ class Candidate:
     layout: Layout
     violation: dict[str, Any] | None = None
     applied: dict[str, float] = field(default_factory=dict)
-    divergence: float = 0.0  # max object position deviation from the reference (m)
+    divergence: float = 0.0  # max object position deviation from the base trajectory (m)
+    base: str | None = None  # valid trajectory a violation was built from ("ref", "f03", ...)
 
     @property
     def label(self) -> str:
@@ -111,6 +115,29 @@ def teleport(
     return t
 
 
+def drift(
+    ref: Trajectory, P: int, accel: float, rng: np.random.Generator, body="object", offsets_ok=None
+) -> Trajectory:
+    """Add ``x += a (t - t_P)^2 / 2`` sideways (horizontal, perpendicular to the
+    velocity at frame ``P``). Position and velocity stay continuous at onset, so
+    only the dominant motion's curvature betrays the unsupported force.
+    ``offsets_ok(offsets)`` can reject a side that would add a second violation."""
+    p = np.asarray(ref.positions[body], float)
+    v = p[min(P + 1, len(p) - 1), :2] - p[max(P - 1, 0), :2]
+    if np.linalg.norm(v) < 1e-6:
+        raise ValueError("object is not moving at the prefix end; drift has no defined direction")
+    side = np.array([-v[1], v[0], 0.0]) / np.linalg.norm(v)
+    t = np.maximum(np.arange(len(p)) - P, 0) / ref.fps
+    for sign in (1.0, -1.0) if rng.random() < 0.5 else (-1.0, 1.0):
+        off = np.outer(0.5 * accel * t**2, sign * side)
+        if offsets_ok is None or offsets_ok(off):
+            out = _copy(ref)
+            for f in range(P + 1, out.num_frames):
+                out.positions[body][f] = (p[f] + off[f]).tolist()
+            return out
+    raise ValueError("drift to either side leaves the support")
+
+
 def freeze(ref: Trajectory, P: int, body="object") -> Trajectory:
     t = _copy(ref)
     for f in range(P + 1, t.num_frames):
@@ -154,10 +181,13 @@ def make_violation(
     rng: np.random.Generator,
     vanish_start: int | None = None,
     offset_ok=None,
+    offsets_ok=None,
 ) -> Trajectory:
     value = SEVERITIES[vtype][severity]
     if vtype == "teleport":
         return teleport(ref, P, value, rng, offset_ok=offset_ok)
+    if vtype == "drift":
+        return drift(ref, P, value, rng, offsets_ok=offsets_ok)
     if vtype == "freeze":
         return freeze(ref, P)
     if vtype == "time_reversal":

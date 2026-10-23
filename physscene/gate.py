@@ -213,7 +213,9 @@ class Gate:
     # ------------------------------------------------------------------ Q
     def q_item_quality(self) -> dict[str, Any]:
         """Benchmark items must be usable: every candidate differs from its
-        reference in rendered pixels after the prefix, and the object stays in view."""
+        reference in rendered pixels after the prefix (a violation built on a
+        held-out alternative must also differ from that base), and the object
+        stays in view."""
         by_key = {(m["group_id"], m["appearance"], m["view"], (m.get("candidate") or {}).get("id")): (d, m)
                   for d, m in self.samples.items()}
         not_distinct, out_of_view, checked = [], [], 0
@@ -221,17 +223,21 @@ class Gate:
             c = m.get("candidate") or {}
             if c.get("kind") not in ("valid", "invalid") or (gid, app, view, "ref") not in by_key:
                 continue
-            rd, _ = by_key[(gid, app, view, "ref")]
             P = c.get("prefix_frames") or 0
             T = m["num_frames"]
-            changed = 0
-            for t in range(P + 1, T, 2):
-                a = np.asarray(Image.open(d / "rgb" / f"frame_{t:04d}.png"), int)
-                b = np.asarray(Image.open(rd / "rgb" / f"frame_{t:04d}.png"), int)
-                changed += int((np.abs(a - b).max(axis=-1) > 30).sum() >= 6)
+            others = ["ref"] + ([c["base"]] if c.get("base") not in (None, "ref") else [])
+            for other in others:
+                if (gid, app, view, other) not in by_key:
+                    continue
+                rd, _ = by_key[(gid, app, view, other)]
+                changed = 0
+                for t in range(P + 1, T, 2):
+                    a = np.asarray(Image.open(d / "rgb" / f"frame_{t:04d}.png"), int)
+                    b = np.asarray(Image.open(rd / "rgb" / f"frame_{t:04d}.png"), int)
+                    changed += int((np.abs(a - b).max(axis=-1) > 30).sum() >= 6)
+                if changed < 2:
+                    not_distinct.append(str(d.relative_to(self.dataset)) + ("" if other == "ref" else f" (vs base {other})"))
             checked += 1
-            if changed < 2:
-                not_distinct.append(str(d.relative_to(self.dataset)))
             vtype = (c.get("violation") or {}).get("type")
             if vtype != "vanish" and m["event"] != "occlusion" and (d / "masks.npz").exists():
                 mk = np.load(d / "masks.npz")["masks"][P + 1 :, ..., 0]

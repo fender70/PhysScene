@@ -84,7 +84,7 @@ def make_candidates(
     cannot see are dropped."""
     from .planner import perturb, seeded_rng  # local import (planner imports this module)
 
-    bm = cfg.benchmark
+    bm = cfg.benchmark.for_event(layout.event)
     P = bm.prefix_frames
     backend = get_backend(cfg.physics.backend)
     tol = bm.validator_tol
@@ -102,9 +102,10 @@ def make_candidates(
     ref_tracks = [view_track(ref, c, layout, level, cfg.catalog, post) for c in cams]
     px = bm.min_pixel_shift
 
-    def camera_ok(traj: Trajectory, vtype: str | None) -> str:
-        """'' if acceptable, else a rejection reason."""
-        for cam, rt in zip(cams, ref_tracks):
+    def camera_ok(traj: Trajectory, vtype: str | None, base_tracks: list[dict] | None = None) -> str:
+        """'' if acceptable, else a rejection reason. ``base_tracks``: what the
+        candidate must be distinguishable from (default: the reference)."""
+        for cam, rt in zip(cams, base_tracks if base_tracks is not None else ref_tracks):
             ct = view_track(traj, cam, layout, level, cfg.catalog, post)
             if not visibly_different(rt, ct, px * cam.resolution[0] / 1280):
                 return "invisible_in_view"
@@ -159,69 +160,94 @@ def make_candidates(
         out.append(c)
     stats["valid"] = k
 
-    # where the reference object is clearly visible in every view (for vanish onsets)
-    if cams:
-        seen = np.min(np.stack([rt["vis"] for rt in ref_tracks]), axis=0) >= 0.6
-    else:
-        seen = np.ones(len(post), bool)
+    def tracks_for(traj: Trajectory) -> list[dict]:
+        return [view_track(traj, c, layout, level, cfg.catalog, post) for c in cams]
 
-    def vanish_start(frames_invisible: float) -> int | None:
+    def vanish_start(seen: np.ndarray, frames_invisible: float) -> int | None:
         need = 1 if frames_invisible >= T else min(int(frames_invisible), 4)
         for i in range(1, len(post) - need):
             if seen[i : i + need].all():
                 return post[i]
         return None
 
-    def on_support_offset_ok(off) -> bool:
-        """A teleport must not move the object off the support it is resting on."""
-        tr = ref.pos("object")
-        for t in range(P + 1, T):
-            p = tr[t]
-            for s in level.surfaces.values():
-                if s.contains_xy(p) and abs(p[2] - s.top_z) < 0.3:
-                    if not s.contains_xy(p + off, margin=0.02):
-                        return False
-        return True
+    def on_support_offset_ok(base: Trajectory):
+        def ok(off) -> bool:
+            """A teleport must not move the object off the support it is resting on."""
+            return offsets_ok(base)(np.tile(off, (T, 1)))
 
-    # violations
-    for vtype, sevs in bm.invalid.items():
-        allowed = bm.applicable_events.get(vtype)
-        if allowed and layout.event not in allowed:
+        return ok
+
+    def offsets_ok(base: Trajectory):
+        def ok(offs) -> bool:
+            """Per-frame offsets (drift) must keep the object on the support it is resting on."""
+            tr = base.pos("object")
+            for t in range(P + 1, T):
+                p = tr[t]
+                for s in level.surfaces.values():
+                    if s.contains_xy(p) and abs(p[2] - s.top_z) < 0.3:
+                        if not s.contains_xy(p + offs[t], margin=0.02):
+                            return False
+            return True
+
+        return ok
+
+    # violations, each built from a valid base trajectory (the reference and/or
+    # held-out alternatives) with that base's own hidden parameters
+    by_id = {c.cid: c for c in out}
+    for base_id in bm.invalid_bases:
+        if base_id not in by_id:
+            stats[f"invalid_base_missing:{base_id}"] += 1
             continue
-        for sev in sevs:
-            rng = seeded_rng(cfg.seed, "violation", *key, vtype, sev)
-            onset = None
-            if vtype == "vanish":
-                from .violations import SEVERITIES
+        base = by_id[base_id]
+        btraj, bpar = base.traj, base.params
+        btracks = ref_tracks if base_id == "ref" else tracks_for(btraj)
+        # where the base object is clearly visible in every view (for vanish onsets)
+        if cams:
+            seen = np.min(np.stack([rt["vis"] for rt in btracks]), axis=0) >= 0.6
+        else:
+            seen = np.ones(len(post), bool)
+        for vtype, sevs in bm.invalid.items():
+            allowed = bm.applicable_events.get(vtype)
+            if allowed and layout.event not in allowed:
+                continue
+            for sev in sevs:
+                # the reference keeps its historical seed key, so existing plans are unchanged
+                extra = () if base_id == "ref" else (base_id,)
+                rng = seeded_rng(cfg.seed, "violation", *key, vtype, sev, *extra)
+                onset = None
+                if vtype == "vanish":
+                    from .violations import SEVERITIES
 
-                onset = vanish_start(SEVERITIES["vanish"][sev])
-                if onset is None:
-                    stats["invalid_rejected_invisible_in_view:vanish"] += 1
+                    onset = vanish_start(seen, SEVERITIES["vanish"][sev])
+                    if onset is None:
+                        stats["invalid_rejected_invisible_in_view:vanish"] += 1
+                        continue
+                try:
+                    traj = make_violation(vtype, sev, btraj, P, layout, bpar, sim, rng, vanish_start=onset,
+                                          offset_ok=on_support_offset_ok(btraj), offsets_ok=offsets_ok(btraj))
+                except ValueError:
+                    stats[f"invalid_rejected_no_clean_construction:{vtype}"] += 1
                     continue
-            try:
-                traj = make_violation(vtype, sev, ref, P, layout, params, sim, rng, vanish_start=onset,
-                                      offset_ok=on_support_offset_ok)
-            except ValueError:
-                stats[f"invalid_rejected_no_clean_construction:{vtype}"] += 1
-                continue
-            d = divergence(ref, traj)
-            if d < bm.invalid_min_divergence:
-                stats[f"invalid_rejected_indistinguishable:{vtype}"] += 1
-                continue
-            reason = camera_ok(traj, vtype)
-            if reason:
-                stats[f"invalid_rejected_{reason}:{vtype}"] += 1
-                continue
-            verdict = validate(layout, params, traj, level, cfg.catalog, tol)
-            if verdict.valid:
-                stats[f"invalid_missed_by_validator:{vtype}"] += 1
-                if bm.require_validator:
+                d = divergence(btraj, traj)
+                if d < bm.invalid_min_divergence:
+                    stats[f"invalid_rejected_indistinguishable:{vtype}"] += 1
                     continue
-            else:
-                stats[f"invalid_confirmed:{vtype}"] += 1
-            c = Candidate(f"{vtype}_{sev}", "invalid", traj, params, layout, violation=violation_meta(vtype, sev, P, onset), divergence=d)
-            c.applied = {"validator": verdict.to_dict()}
-            out.append(c)
+                reason = camera_ok(traj, vtype, btracks)
+                if reason:
+                    stats[f"invalid_rejected_{reason}:{vtype}"] += 1
+                    continue
+                verdict = validate(layout, bpar, traj, level, cfg.catalog, tol)
+                if verdict.valid:
+                    stats[f"invalid_missed_by_validator:{vtype}"] += 1
+                    if bm.require_validator:
+                        continue
+                else:
+                    stats[f"invalid_confirmed:{vtype}"] += 1
+                cid = f"{vtype}_{sev}" if base_id == "ref" else f"{base_id}_{vtype}_{sev}"
+                c = Candidate(cid, "invalid", traj, bpar, layout, violation=violation_meta(vtype, sev, P, onset),
+                              divergence=d, base=base_id)
+                c.applied = {"validator": verdict.to_dict()}
+                out.append(c)
     stats["invalid"] = sum(1 for c in out if c.kind == "invalid")
     return out, dict(stats)
 

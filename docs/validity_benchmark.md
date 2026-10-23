@@ -28,6 +28,26 @@ ever defines ground truth.
 | `time_reversal` | motion plays backwards after P | n/a |
 | `vanish` | object disappears (low/mid: reappears after 8 or 16 frames; high: never returns) | low / mid / high |
 | `penetration` | contact with the next support or collider disabled (falls through the table, passes through the cup) | n/a |
+| `drift` | smooth unsupported sideways acceleration, ½·a·t² perpendicular to the velocity at P; continuous in position and velocity, never moves the object off its support | low / mid / high = 0.03 / 0.09 / 0.27 m/s² (6 / 18 / 54 cm after 2 s) |
+
+### Violations matched to held-out alternatives
+
+By default every violation is an edit of the reference. If the reference is
+also used as an evaluation reference, a small edit of it is trivially "close to
+a reference", which confounds any similarity metric. `invalid.bases` builds
+the violations from valid alternatives instead (`[f03, f04, f05]`, for example). Each one
+uses that alternative's trajectory **and** hidden parameters, is matched to it
+(`base` in `candidate.json` and `pairs.jsonl`), and must be visibly different
+from it. Candidate ids are `<base>_<type>_<severity>`.
+
+### Per-event settings
+
+`per_event.<event>` overrides keys under `valid` / `invalid` for one event. Use it
+so that each event resamples only parameters that act **after** the prefix
+(restitution at landing, masses at contact), and the conditioning frames cannot
+reveal them. It also lets you make an event a single-future control
+(`valid: {count: 0}`, `invalid: {bases: [ref]}`). See
+[`configs/spectra_exp_a.yaml`](../configs/spectra_exp_a.yaml).
 
 A candidate is kept only if it is **visibly different** from the reference:
 
@@ -58,6 +78,13 @@ and contact flags. It shares no code with the generator. It checks:
 * **rolling angular momentum**: a sphere, or a cylinder lying on its side,
   conserves angular momentum about the contact point, so it cannot stop,
   reverse or speed up on its own;
+* **straight path**: once a body has settled on one flat support with nothing
+  else nearby, friction and rolling resistance act along its motion, so nothing
+  pushes it sideways. Its path is fitted with a parabola, and a sideways
+  acceleration above 0.015 m/s² is flagged. A lying cylinder may legitimately curve
+  while it slips along its axis after landing askew, but friction can only
+  shrink that slip, so for cylinders the law checks that it never grows.
+  Runs where a body's heading turns are not judged;
 * **energy**: total mechanical energy never rises (impact intervals excluded
   from the baseline);
 * **non-penetration**: no sinking into supports or overlapping bodies.
@@ -70,6 +97,12 @@ filtering disabled, the validator accepted **88/90** valid futures and
 `freeze` on slow objects, where stopping is hard to tell apart from ordinary
 deceleration. Reproduce with `require_validator: false` and the counts in
 `plan.json`.
+
+The straight-path law was added later (for `drift`), with its tolerance set on
+the starter shapes. On the same held-out assets (6 alternatives per group, 2
+views), it flagged **none** of 90 valid futures. It raised confirmed drift
+violations from 4/20 to 11/20; unconfirmed ones are dropped by
+`require_validator`. The other violation types were unchanged (2 `freeze` misses).
 
 References must pass the validator too. On our assets this caught a MuJoCo
 artefact, a cylinder gaining energy while rolling over a box edge; such layouts
@@ -126,9 +159,12 @@ benchmark:
     perturb: {friction: {rel: 0.4}, restitution: {rel: 0.4}, mass: {rel: 0.4}, collider.mass: {rel: 0.6}}
   invalid:
     min_divergence: 0.03
+    bases: [ref]                # or held-out alternatives, e.g. [f03, f04, f05]
     types: {teleport: [low, high], speed_jump: [low, high], gravity: [mid, high], freeze: [mid],
             time_reversal: [mid], vanish: [low, high], penetration: [mid]}
     applicable_events: {gravity: [fall]}
+  per_event:                    # optional; keys here replace the shared valid/invalid keys
+    occlusion: {valid: {count: 0}, invalid: {bases: [ref]}}
 ```
 
 The key event is forced to happen after the prefix: the planner raises the

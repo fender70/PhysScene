@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import multiprocessing
+import os
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -90,7 +92,12 @@ def cmd_render(a) -> int:
     args = [(str(p), str(plan_dir), str(render_root), a.scale, cfg_path) for p in paths]
     t = time.time()
     if a.workers > 1:
-        with ProcessPoolExecutor(a.workers) as ex:
+        # One BLAS thread per worker: the ray caster's small matrix products
+        # otherwise spin up a thread pool per process and oversubscribe the CPU
+        # (about 4x the CPU time on 4 cores). Spawned workers read these at import.
+        for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+            os.environ.setdefault(var, "1")
+        with ProcessPoolExecutor(a.workers, mp_context=multiprocessing.get_context("spawn")) as ex:
             for i, (jid, st) in enumerate(ex.map(_preview_worker, args), 1):
                 print(f"[{i}/{len(args)}] {jid} {st}", flush=True)
     else:
